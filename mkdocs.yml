@@ -1,0 +1,27 @@
+site_name: NodeMCU Google Sheets Logger
+
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - Google Sheet Setup: google-sheet-setup.md
+  - Apps Script: google-apps-script.md
+  - API Reference: api-reference.md
+  - Issues & Fixes: issues-and-fixes.md
+  - Next Steps: next-steps.md
+
+theme:
+  name: material
+markdown_extensions:
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+  - admonition
+  - codehilite
+  - footnotes
+  - tables
+  - attr_list 
+plugins:
+  - plantuml:
+      puml_url: https://www.plantuml.com/plantuml/
+
+    

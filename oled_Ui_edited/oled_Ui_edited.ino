@@ -28,11 +28,11 @@ uint8_t eepromManualState = 0;
 // ================= NTP =================
 
 const char* NTP_SERVER = "pool.ntp.org";
-const long  GMT_OFFSET_SEC = 19800;   // IST
-const int   DAYLIGHT_OFFSET_SEC = 0;
+const long GMT_OFFSET_SEC = 19800;  // IST
+const int DAYLIGHT_OFFSET_SEC = 0;
 
 bool timeValid = false;
-struct tm timeinfo;   // ✅ GLOBAL
+struct tm timeinfo;  // ✅ GLOBAL
 
 
 // ================= OLED =================
@@ -101,6 +101,8 @@ int manualSelectIndex = 0;  // 0=OFF 1=ON
 float liveHum = 55.0;
 float setTemp = 37.5;
 float hysteresis = 0.3;
+uint8_t incubationDay = 7;  // STATUS screen (V1 placeholder)
+
 
 bool heaterOn = false;
 bool manualHeaterOn = false;
@@ -230,15 +232,15 @@ void drawHome() {
   display.setCursor(0, 54);
   display.print("WiFi  : ");
   display.print(WiFi.status() == WL_CONNECTED ? "CONNECTED" : "DISCONNECTED");
- if (timeValid) {
-  char timeStr[10];
-  sprintf(timeStr, "%02d:%02d",
-          timeinfo.tm_hour,
-          timeinfo.tm_min );
+  if (timeValid) {
+    char timeStr[10];
+    sprintf(timeStr, "%02d:%02d",
+            timeinfo.tm_hour,
+            timeinfo.tm_min);
 
-  display.setCursor(90, 0);
-  display.print(timeStr);
-}
+    display.setCursor(90, 0);
+    display.print(timeStr);
+  }
 
 
   display.display();
@@ -251,6 +253,47 @@ void drawMenu() {
     display.print(i == menuIndex ? "> " : "  ");
     display.println(menuItems[i]);
   }
+  display.display();
+}
+void drawStatus() {
+  drawHeader("STATUS");
+
+  float delta = liveTemp - setTemp;
+
+  display.setCursor(0, 14);
+  display.print("Temp : ");
+  if (sensorValid) {
+    display.print(liveTemp, 1);
+    display.print((char)247);  // ° symbol
+    display.print("C ");
+    display.print("(");
+    display.print(delta >= 0 ? "+" : "");
+    display.print(delta, 1);
+    display.print(")");
+  } else {
+    display.print("SENSOR ERR");
+  }
+
+  display.setCursor(0, 24);
+  display.print("Hum  : -- %");
+
+  display.setCursor(0, 34);
+  display.print("Day  : ");
+  display.print(incubationDay < 10 ? "0" : "");
+  display.print(incubationDay);
+
+  display.setCursor(0, 44);
+  display.print("Heater: ");
+  display.print(heaterOn ? "ON " : "OFF");
+  display.print(" Mode: ");
+  display.print(heaterMode == HEATER_AUTO ? "AUTO" : "MAN");
+
+  display.setCursor(0, 54);
+  display.print("Set  : ");
+  display.print(setTemp, 1);
+  display.print(" Hys : ");
+  display.print(hysteresis, 1);
+
   display.display();
 }
 
@@ -361,29 +404,26 @@ void setup() {
   drawHome();
 }
 
-// ================= LOOP =================
 void loop() {
   button.loop();
   temperatureTask();
 
+  // ---------- NTP update ----------
   static unsigned long lastTimeCheck = 0;
-
-if (WiFi.status() == WL_CONNECTED && millis() - lastTimeCheck > 1000) {
-  lastTimeCheck = millis();
-  if (getLocalTime(&timeinfo)) {
-    timeValid = true;
-  } else {
-    timeValid = false;
+  if (WiFi.status() == WL_CONNECTED && millis() - lastTimeCheck > 1000) {
+    lastTimeCheck = millis();
+    timeValid = getLocalTime(&timeinfo);
   }
-}
 
-
+  // ---------- Heater + screen refresh ----------
   if (millis() - lastHeaterUpdate > HEATER_INTERVAL) {
     lastHeaterUpdate = millis();
     updateHeaterControl();
     if (uiState == UI_HOME) drawHome();
+    else if (uiState == UI_STATUS) drawStatus();
   }
 
+  // ---------- Encoder ----------
   int enc = readEncoder();
   if (enc != 0) lastUiActivity = millis();
 
@@ -412,6 +452,7 @@ if (WiFi.status() == WL_CONNECTED && millis() - lastTimeCheck > 1000) {
     }
   }
 
+  // ---------- Button ----------
   if (button.isPressed()) {
     lastUiActivity = millis();
 
@@ -421,36 +462,40 @@ if (WiFi.status() == WL_CONNECTED && millis() - lastTimeCheck > 1000) {
     }
 
     else if (uiState == UI_MENU) {
-      if (menuIndex == 0) {
-        uiState = UI_HOME;
-        drawHome();
-      } else if (menuIndex == 1) {
+      if (menuIndex == 0) {           // Status
+        uiState = UI_STATUS;
+        drawStatus();
+      } else if (menuIndex == 1) {    // WiFi
         wifiMenuIndex = 0;
         uiState = UI_WIFI_MENU;
         drawWifiMenu();
-      } else if (menuIndex == 2) {
+      } else if (menuIndex == 2) {    // Settings
         settingsIndex = 0;
         uiState = UI_SETTINGS;
         drawSettings();
-      } else {
+      } else {                        // Back
         uiState = UI_HOME;
         drawHome();
       }
+    }
+
+    else if (uiState == UI_STATUS) {
+      uiState = UI_MENU;
+      drawMenu();
     }
 
     else if (uiState == UI_WIFI_MENU) {
       if (wifiMenuIndex == 0) {
         wm.startConfigPortal("EggIncubator_Setup");
         drawWifiMenu();
-      } else if (wifiMenuIndex == 1) {  // Status
-        uiState = UI_HOME;
-        drawHome();
-      } else {  // Back
+      } else if (wifiMenuIndex == 1) {   // Status
+        uiState = UI_STATUS;
+        drawStatus();
+      } else {
         uiState = UI_MENU;
         drawMenu();
       }
     }
-
 
     else if (uiState == UI_SETTINGS) {
       if (settingsIndex == 0) {
@@ -471,7 +516,7 @@ if (WiFi.status() == WL_CONNECTED && millis() - lastTimeCheck > 1000) {
 
     else if (uiState == UI_HEATER_MODE) {
       heaterMode = heaterModeIndex == 0 ? HEATER_AUTO : HEATER_MANUAL;
-      saveSettingsToEEPROM();  // ✅ SAVE MODE
+      saveSettingsToEEPROM();
 
       if (heaterMode == HEATER_MANUAL) {
         manualSelectIndex = manualHeaterOn ? 1 : 0;
@@ -481,22 +526,29 @@ if (WiFi.status() == WL_CONNECTED && millis() - lastTimeCheck > 1000) {
         uiState = UI_SETTINGS;
         drawSettings();
       }
-    } else if (uiState == UI_MANUAL_HEATER) {
+    }
+
+    else if (uiState == UI_MANUAL_HEATER) {
       manualHeaterOn = (manualSelectIndex == 1);
-      saveSettingsToEEPROM();  // ✅ SAVE MANUAL STATE
+      saveSettingsToEEPROM();
       uiState = UI_SETTINGS;
       drawSettings();
-    } else if (uiState == UI_SET_TEMP) {
-      saveSettingsToEEPROM();  // SAVE already done by encoder
+    }
+
+    else if (uiState == UI_SET_TEMP) {
+      saveSettingsToEEPROM();
       uiState = UI_SETTINGS;
       drawSettings();
-    } else if (uiState == UI_HYSTERESIS) {
+    }
+
+    else if (uiState == UI_HYSTERESIS) {
       saveSettingsToEEPROM();
       uiState = UI_SETTINGS;
       drawSettings();
     }
   }
 
+  // ---------- UI timeout ----------
   if (uiState != UI_HOME && millis() - lastUiActivity > UI_TIMEOUT) {
     uiState = UI_HOME;
     drawHome();

@@ -6,6 +6,9 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
 // ================= OLED =================
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -18,11 +21,26 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define DT_PIN      D6
 #define SW_PIN      D5
 #define HEATER_PIN  D0
+#define ONE_WIRE_BUS D4   // DS18B20
 
 // ================= ENCODER =================
 int CLK_state;
 int prev_CLK_state;
 ezButton button(SW_PIN);
+
+// ================== DS18B20 ==================
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+
+float rawTemp = 0.0;
+float filteredTemp = 0.0;
+float liveTemp = 0.0;
+bool sensorValid = false;
+
+unsigned long lastTempRequest = 0;
+unsigned long tempRequestTime = 0;
+bool tempRequested = false;
+const unsigned long TEMP_INTERVAL = 1000;
 
 // ================== UI STATE ==================
 enum UiState {
@@ -38,7 +56,7 @@ enum UiState {
 };
 
 UiState uiState = UI_HOME;
-UiState previousState = UI_HOME;   // <<< FIX
+UiState previousState = UI_HOME;
 
 // ================== MENUS ==================
 const char* menuItems[] = { "Status", "WiFi", "Settings", "Back" };
@@ -52,7 +70,6 @@ int settingsIndex = 0;
 int heaterModeIndex = 0;
 
 // ================== DATA ==================
-float liveTemp   = 37.5;
 float liveHum    = 55.0;
 float setTemp    = 37.5;
 float hysteresis = 0.3;
@@ -81,14 +98,47 @@ const char* wifiQuality(int rssi) {
   return "POOR";
 }
 
+// ================= TEMPERATURE TASK =================
+void temperatureTask() {
+  unsigned long now = millis();
+
+  if (!tempRequested && now - lastTempRequest >= TEMP_INTERVAL) {
+    sensors.requestTemperatures();
+    tempRequestTime = now;
+    tempRequested = true;
+    lastTempRequest = now;
+  }
+
+  if (tempRequested && now - tempRequestTime >= 750) {
+    float t = sensors.getTempCByIndex(0);
+
+    if (t > -40 && t < 100 && t != DEVICE_DISCONNECTED_C) {
+      sensorValid = true;
+      rawTemp = t;
+      filteredTemp = (filteredTemp * 0.7) + (rawTemp * 0.3);
+      liveTemp = filteredTemp;
+    } else {
+      sensorValid = false;
+    }
+    tempRequested = false;
+  }
+}
+
 // ================= HEATER CONTROL =================
 void updateHeaterControl() {
+  if (!sensorValid) {
+    heaterOn = false;
+    digitalWrite(HEATER_PIN, LOW);
+    return;
+  }
+
   if (heaterMode == HEATER_AUTO) {
     if (liveTemp <= setTemp - hysteresis) heaterOn = true;
     else if (liveTemp >= setTemp + hysteresis) heaterOn = false;
   } else {
     heaterOn = manualHeaterOn;
   }
+
   digitalWrite(HEATER_PIN, heaterOn ? HIGH : LOW);
 }
 
@@ -107,7 +157,13 @@ void drawHome() {
   drawHeader("EGG INCUBATOR");
 
   display.setCursor(0, 14);
-  display.print("Temp  : "); display.print(liveTemp, 1); display.print(" C");
+  display.print("Temp  : ");
+  if (sensorValid) {
+    display.print(liveTemp, 1);
+    display.print(" C");
+  } else {
+    display.print("SENSOR ERR");
+  }
 
   display.setCursor(0, 24);
   display.print("Hum   : "); display.print(liveHum, 0); display.print(" %");
@@ -149,7 +205,13 @@ void drawStatus() {
   drawHeader("STATUS");
 
   display.setCursor(0, 14);
-  display.print("Temp  : "); display.print(liveTemp, 1); display.print(" C");
+  display.print("Temp  : ");
+  if (sensorValid) {
+    display.print(liveTemp, 1);
+    display.print(" C");
+  } else {
+    display.print("SENSOR ERR");
+  }
 
   display.setCursor(0, 24);
   display.print("Hum   : "); display.print(liveHum, 0); display.print(" %");
@@ -176,7 +238,7 @@ void drawSettings() {
 
 void drawSetTemp() {
   drawHeader("SET TEMP");
-  display.setCursor(0, 28);
+  display.setCursor(0, 32);
   display.print("Target: "); display.print(setTemp, 1); display.print(" C");
   display.display();
 }
@@ -231,6 +293,10 @@ void setup() {
   Wire.begin(D2, D1);
   display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
 
+  sensors.begin();
+  sensors.setResolution(12);
+  sensors.setWaitForConversion(false);
+
   prev_CLK_state = digitalRead(CLK_PIN);
   lastUiActivity = millis();
   lastHeaterUpdate = millis();
@@ -244,6 +310,7 @@ void setup() {
 // ================== LOOP ==================
 void loop() {
   button.loop();
+  temperatureTask();
 
   if (millis() - lastHeaterUpdate > HEATER_INTERVAL) {
     lastHeaterUpdate = millis();
@@ -305,8 +372,7 @@ void loop() {
     }
     else if (uiState == UI_STATUS) {
       uiState = previousState;
-      if (uiState == UI_MENU) drawMenu();
-      else if (uiState == UI_WIFI_MENU) drawWiFiMenu();
+      (uiState == UI_MENU) ? drawMenu() : drawWiFiMenu();
     }
     else if (uiState == UI_SETTINGS) {
       if (settingsIndex == 0) { uiState = UI_SET_TEMP; drawSetTemp(); }

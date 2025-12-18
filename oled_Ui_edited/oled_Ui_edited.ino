@@ -109,6 +109,8 @@ int heaterModeIndex = 0;
 int incubationMenuIndex = 0;
 int incubationStartIndex = 0;  // 0=EDIT, 1=START, 2=BACK
 int confirmStartIndex = 0;     // 0 = CONFIRM, 1 = CANCEL
+uint8_t statusPage = 0;        // 0 = Page 1, 1 = Page 2
+
 
 // ===== Manual Heater =====
 int manualSelectIndex = 0;  // 0=OFF 1=ON
@@ -504,8 +506,8 @@ void drawEditStartDateTime() {
   display.display();
 }
 
-void drawStatus() {
-  drawHeader("STATUS");
+void drawStatusPage1() {
+  drawHeader("STATUS (1/2)");
 
   float delta = liveTemp - setTemp;
 
@@ -513,8 +515,9 @@ void drawStatus() {
   display.print("Temp : ");
   if (sensorValid) {
     display.print(liveTemp, 1);
-    display.print((char)247);  // ° symbol
+    display.print((char)247);
     display.print("C ");
+
     display.print("(");
     display.print(delta >= 0 ? "+" : "");
     display.print(delta, 1);
@@ -528,14 +531,20 @@ void drawStatus() {
 
   display.setCursor(0, 34);
   display.print("Day  : ");
-  display.print(incubationDay < 10 ? "0" : "");
-  display.print(incubationDay);
+  if (incubationStarted) {
+    if (incubationDay < 10) display.print("0");
+    display.print(incubationDay);
+    display.print(" / 21");
+  } else {
+    display.print("--");
+  }
 
   display.setCursor(0, 44);
   display.print("Heater: ");
   display.print(heaterOn ? "ON " : "OFF");
-  display.print(" Mode: ");
-  display.print(heaterMode == HEATER_AUTO ? "AUTO" : "MAN");
+  display.print(" ");
+  display.print("Mode: ");
+  display.print(heaterMode == HEATER_AUTO ? "AUT" : "MAN");
 
   display.setCursor(0, 54);
   display.print("Set  : ");
@@ -545,6 +554,59 @@ void drawStatus() {
 
   display.display();
 }
+void drawStatusPage2() {
+  drawHeader("STATUS (2/2)");
+
+  // Remaining days
+  display.setCursor(0, 14);
+  display.print("Left  : ");
+  if (incubationStarted) {
+    int left = INCUBATION_DAYS - incubationDay;
+    if (left < 0) left = 0;
+    display.print(left);
+    display.print(" days");
+  } else {
+    display.print("--");
+  }
+
+  // Hatch date
+  display.setCursor(0, 24);
+  display.print("Hatch : ");
+  if (incubationStarted) {
+    time_t hatchEpoch = incubationStartEpoch + (INCUBATION_DAYS * 86400UL);
+    struct tm hatchTm;
+    localtime_r(&hatchEpoch, &hatchTm);
+
+    const char* months[] = {
+      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    };
+
+    display.printf("%02d-%s",
+                   hatchTm.tm_mday,
+                   months[hatchTm.tm_mon]);
+  } else {
+    display.print("--");
+  }
+
+  // Alarm placeholder
+  display.setCursor(0, 36);
+  display.print("Alarm : ");
+  display.print(sensorValid ? "NONE" : "SENSOR");
+
+  // Log placeholder
+  display.setCursor(0, 48);
+  display.print("Log   : OK");
+
+  display.display();
+}
+void drawStatus() {
+  if (statusPage == 0)
+    drawStatusPage1();
+  else
+    drawStatusPage2();
+}
+
 
 void drawWifiMenu() {
   drawHeader("WIFI");
@@ -748,7 +810,11 @@ void loop() {
           break;
       }
       drawEditStartDateTime();
+    } else if (uiState == UI_STATUS) {
+      statusPage = (statusPage + enc + 2) % 2;
+      drawStatus();
     }
+
 
     // ===== WIFI MENU =====
     else if (uiState == UI_WIFI_MENU) {
@@ -895,9 +961,11 @@ void loop() {
     }
     // ===== STATUS =====
     else if (uiState == UI_STATUS) {
+      statusPage = 0;  // reset to page 1
       uiState = UI_MENU;
       drawMenu();
     }
+
     // ===== WIFI MENU =====
     else if (uiState == UI_WIFI_MENU) {
       if (wifiMenuIndex == 0) {  // Connect
@@ -980,6 +1048,5 @@ void loop() {
 
     uiState = UI_HOME;
     drawHome();
-  
-}
+  }
 }

@@ -21,6 +21,9 @@
 #define ADDR_HYSTERESIS 4    // float (4 bytes)
 #define ADDR_HEATER_MODE 8   // uint8_t
 #define ADDR_MANUAL_STATE 9  // uint8_t
+#define ADDR_INCUBATION_STARTED  10   // uint8_t
+#define ADDR_INCUBATION_EPOCH    11   // time_t (4 bytes on ESP8266)
+
 
 uint8_t eepromHeaterMode = 0;
 uint8_t eepromManualState = 0;
@@ -218,7 +221,17 @@ void loadSettingsFromEEPROM() {
   heaterMode = (HeaterMode)eepromHeaterMode;
 
   manualHeaterOn = (eepromManualState == 1);
+
+  // ✅ ADD THESE
+  uint8_t incStarted = 0;
+  EEPROM.get(ADDR_INCUBATION_STARTED, incStarted);
+  incubationStarted = (incStarted == 1);
+
+  EEPROM.get(ADDR_INCUBATION_EPOCH, incubationStartEpoch);
+
+  updateIncubationDay();  // 🔑 recompute derived value
 }
+
 
 void updateIncubationDay() {
   if (!incubationStarted) {
@@ -244,8 +257,13 @@ void saveSettingsToEEPROM() {
   EEPROM.put(ADDR_HEATER_MODE, eepromHeaterMode);
   EEPROM.put(ADDR_MANUAL_STATE, eepromManualState);
 
+  // ✅ ADD THESE TWO LINES
+  EEPROM.put(ADDR_INCUBATION_STARTED, (uint8_t)incubationStarted);
+  EEPROM.put(ADDR_INCUBATION_EPOCH, incubationStartEpoch);
+
   EEPROM.commit();
 }
+
 
 
 // ================= OLED HELPERS =================

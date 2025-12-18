@@ -72,6 +72,13 @@ const unsigned long TEMP_INTERVAL = 1000;
 enum UiState {
   UI_HOME,
   UI_MENU,
+
+  UI_INCUBATION_MENU,
+  UI_INCUBATION_START,
+  UI_EDIT_START_DATETIME,
+  UI_INCUBATION_INFO,
+  UI_CONFIRM_START,
+
   UI_STATUS,
   UI_WIFI_MENU,
   UI_SETTINGS,
@@ -81,11 +88,13 @@ enum UiState {
   UI_HYSTERESIS
 };
 
+
 UiState uiState = UI_HOME;
 
 // ================== MENUS ==================
-const char* menuItems[] = { "Status", "WiFi", "Settings", "Back" };
-const char* wifiMenuItems[] = { "Connect / Reconnect", "Status", "Back" };
+const char* menuItems[] = { "Incubation", "Status", "WiFi", "Settings", "Back" };
+const char* incubationMenuItems[] = { "Start", "Info", "Reset", "Back" };
+const char* wifiMenuItems[] = { "Connect", "Status", "Back" };
 const char* settingsItems[] = { "Set Temperature", "Heater Mode", "Hysteresis", "Back" };
 const char* heaterModeItems[] = { "AUTO", "MANUAL" };
 
@@ -93,6 +102,9 @@ int menuIndex = 0;
 int wifiMenuIndex = 0;
 int settingsIndex = 0;
 int heaterModeIndex = 0;
+int incubationMenuIndex = 0;
+int incubationStartIndex = 0;  // 0=EDIT, 1=START, 2=BACK
+int confirmStartIndex = 0;     // 0 = CONFIRM, 1 = CANCEL
 
 // ===== Manual Heater =====
 int manualSelectIndex = 0;  // 0=OFF 1=ON
@@ -101,7 +113,32 @@ int manualSelectIndex = 0;  // 0=OFF 1=ON
 float liveHum = 55.0;
 float setTemp = 37.5;
 float hysteresis = 0.3;
-uint8_t incubationDay = 7;  // STATUS screen (V1 placeholder)
+//uint8_t incubationDay = 7;  // STATUS screen (V1 placeholder)
+
+// ================= INCUBATION =================
+#define INCUBATION_DAYS 21
+
+bool incubationStarted = false;
+time_t incubationStartEpoch = 0;
+uint8_t incubationDay = 0;
+
+// -------- Edit start date & time --------
+enum EditField {
+  EDIT_DAY,
+  EDIT_MONTH,
+  EDIT_YEAR,
+  EDIT_HOUR,
+  EDIT_MINUTE,
+  EDIT_DONE
+};
+
+EditField editField = EDIT_DAY;
+
+uint8_t editDay;
+uint8_t editMonth;
+uint16_t editYear;
+uint8_t editHour;
+uint8_t editMinute;
 
 
 bool heaterOn = false;
@@ -183,6 +220,20 @@ void loadSettingsFromEEPROM() {
   manualHeaterOn = (eepromManualState == 1);
 }
 
+void updateIncubationDay() {
+  if (!incubationStarted) {
+    incubationDay = 0;
+    return;
+  }
+
+  time_t nowEpoch = time(nullptr);
+  time_t elapsed = nowEpoch - incubationStartEpoch;
+
+  if (elapsed < 0) elapsed = 0;  // safety
+
+  uint16_t daysPassed = elapsed / 86400;
+  incubationDay = constrain(daysPassed + 1, 1, 21);
+}
 
 void saveSettingsToEEPROM() {
   eepromHeaterMode = (uint8_t)heaterMode;
@@ -246,15 +297,149 @@ void drawHome() {
   display.display();
 }
 
+void drawConfirmStart() {
+  drawHeader("CONFIRM START");
+
+  display.setCursor(0, 20);
+  display.printf("%02d-%02d-%04d %02d:%02d",
+                 editDay, editMonth, editYear,
+                 editHour, editMinute);
+
+  display.setCursor(0, 44);
+  display.print(confirmStartIndex == 0 ? "> " : "  ");
+  display.println("CONFIRM");
+
+  display.print(confirmStartIndex == 1 ? "> " : "  ");
+  display.println("CANCEL");
+
+  display.display();
+}
+
+
+
 void drawMenu() {
   drawHeader("MAIN MENU");
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < 5; i++) {
     display.setCursor(0, 14 + i * 10);
     display.print(i == menuIndex ? "> " : "  ");
     display.println(menuItems[i]);
   }
   display.display();
 }
+
+void drawIncubationMenu() {
+  drawHeader("INCUBATION");
+  for (int i = 0; i < 4; i++) {
+    display.setCursor(0, 14 + i * 10);
+    display.print(i == incubationMenuIndex ? "> " : "  ");
+    display.println(incubationMenuItems[i]);
+  }
+  display.display();
+}
+
+void drawIncubationStart() {
+  drawHeader("START INCUBATION");
+
+  display.setCursor(0, 16);
+  display.print("Date : ");
+  display.printf("%02d-%02d-%04d",
+                 editDay, editMonth, editYear);
+
+  display.setCursor(0, 26);
+  display.print("Time : ");
+  display.printf("%02d:%02d", editHour, editMinute);
+
+  display.setCursor(0, 44);
+  display.print(incubationStartIndex == 0 ? "> " : "  ");
+  display.println("EDIT");
+
+  display.print(incubationStartIndex == 1 ? "> " : "  ");
+  display.println("START");
+
+  display.print(incubationStartIndex == 2 ? "> " : "  ");
+  display.println("BACK");
+
+  display.display();
+}
+void drawIncubationInfo() {
+  drawHeader("INCUBATION INFO");
+
+  if (!incubationStarted) {
+    display.setCursor(0, 24);
+    display.println("Not started");
+    display.display();
+    return;
+  }
+
+  // Convert start epoch to date
+  struct tm startTm;
+  localtime_r(&incubationStartEpoch, &startTm);
+
+  uint8_t sDay = startTm.tm_mday;
+  uint8_t sMonth = startTm.tm_mon + 1;
+  uint16_t sYear = startTm.tm_year + 1900;
+
+  // Start date
+  display.setCursor(0, 14);
+  display.printf("Start : %02d-%02d-%04d",
+                 sDay, sMonth, sYear);
+
+  // Current day
+  display.setCursor(0, 26);
+  display.printf("Day   : %02d / 21", incubationDay);
+
+  // Milestones
+  display.setCursor(0, 38);
+  display.print("7d  : ");
+  display.println(incubationDay >= 7 ? "DONE" : "PENDING");
+
+  display.setCursor(0, 48);
+  display.print("14d : ");
+  display.println(incubationDay >= 14 ? "DONE" : "PENDING");
+
+  display.setCursor(0, 58);
+  display.print("21d : ");
+  display.println(incubationDay >= 21 ? "DONE" : "PENDING");
+
+  display.display();
+}
+
+void drawEditStartDateTime() {
+  drawHeader("EDIT START TIME");
+
+  display.setCursor(0, 14);
+  if (editField == EDIT_DAY)
+    display.printf("Day   : [%02d]", editDay);
+  else
+    display.printf("Day   :  %02d ", editDay);
+
+  display.setCursor(0, 24);
+  if (editField == EDIT_MONTH)
+    display.printf("Month : [%02d]", editMonth);
+  else
+    display.printf("Month :  %02d ", editMonth);
+
+  display.setCursor(0, 34);
+  if (editField == EDIT_YEAR)
+    display.printf("Year  : [%04d]", editYear);
+  else
+    display.printf("Year  :  %04d ", editYear);
+
+  display.setCursor(0, 44);
+  if (editField == EDIT_HOUR)
+    display.printf("Hour  : [%02d]", editHour);
+  else
+    display.printf("Hour  :  %02d ", editHour);
+
+  display.setCursor(0, 54);
+  if (editField == EDIT_MINUTE)
+    display.printf("Min   : [%02d]", editMinute);
+  else
+    display.printf("Min   :  %02d ", editMinute);
+
+  display.display();
+}
+
 void drawStatus() {
   drawHeader("STATUS");
 
@@ -372,6 +557,23 @@ bool updateTime(struct tm& timeinfo) {
   return true;
 }
 
+void startIncubationFromEdit() {
+  struct tm t;
+  t.tm_mday = editDay;
+  t.tm_mon = editMonth - 1;
+  t.tm_year = editYear - 1900;
+  t.tm_hour = editHour;
+  t.tm_min = editMinute;
+  t.tm_sec = 0;
+
+  incubationStartEpoch = mktime(&t);
+  incubationStarted = true;
+
+  updateIncubationDay();  // ✅ ADD THIS LINE
+  saveSettingsToEEPROM();
+}
+
+
 
 // ================= SETUP =================
 void setup() {
@@ -408,6 +610,13 @@ void loop() {
   button.loop();
   temperatureTask();
 
+  static unsigned long lastDayUpdate = 0;
+  if (millis() - lastDayUpdate > 1000) {
+    lastDayUpdate = millis();
+    updateIncubationDay();
+  }
+
+
   // ---------- NTP update ----------
   static unsigned long lastTimeCheck = 0;
   if (WiFi.status() == WL_CONNECTED && millis() - lastTimeCheck > 1000) {
@@ -419,6 +628,7 @@ void loop() {
   if (millis() - lastHeaterUpdate > HEATER_INTERVAL) {
     lastHeaterUpdate = millis();
     updateHeaterControl();
+
     if (uiState == UI_HOME) drawHome();
     else if (uiState == UI_STATUS) drawStatus();
   }
@@ -428,25 +638,86 @@ void loop() {
   if (enc != 0) lastUiActivity = millis();
 
   if (enc != 0) {
+
+    // ===== MAIN MENU =====
     if (uiState == UI_MENU) {
-      menuIndex = (menuIndex + enc + 4) % 4;
+      menuIndex = (menuIndex + enc + 5) % 5;
       drawMenu();
-    } else if (uiState == UI_WIFI_MENU) {
+    }
+
+    // ===== INCUBATION MENU =====
+    else if (uiState == UI_INCUBATION_MENU) {
+      incubationMenuIndex = (incubationMenuIndex + enc + 4) % 4;
+      drawIncubationMenu();
+    }
+
+    // ===== INCUBATION START SCREEN (EDIT / START / BACK) =====
+    else if (uiState == UI_INCUBATION_START) {
+      incubationStartIndex = (incubationStartIndex + enc + 3) % 3;
+      drawIncubationStart();
+    }
+
+    else if (uiState == UI_CONFIRM_START) {
+      confirmStartIndex = (confirmStartIndex + enc + 2) % 2;
+      drawConfirmStart();
+    }
+
+    // ===== EDIT DATE & TIME (LINEAR EDIT) =====
+    else if (uiState == UI_EDIT_START_DATETIME) {
+      switch (editField) {
+        case EDIT_DAY:
+          editDay = constrain(editDay + enc, 1, 31);
+          break;
+        case EDIT_MONTH:
+          editMonth = constrain(editMonth + enc, 1, 12);
+          break;
+        case EDIT_YEAR:
+          editYear = constrain(editYear + enc, 2024, 2035);
+          break;
+        case EDIT_HOUR:
+          editHour = constrain(editHour + enc, 0, 23);
+          break;
+        case EDIT_MINUTE:
+          editMinute = constrain(editMinute + enc, 0, 59);
+          break;
+        default:
+          break;
+      }
+      drawEditStartDateTime();
+    }
+
+    // ===== WIFI MENU =====
+    else if (uiState == UI_WIFI_MENU) {
       wifiMenuIndex = (wifiMenuIndex + enc + 3) % 3;
       drawWifiMenu();
-    } else if (uiState == UI_SETTINGS) {
+    }
+
+    // ===== SETTINGS =====
+    else if (uiState == UI_SETTINGS) {
       settingsIndex = (settingsIndex + enc + 4) % 4;
       drawSettings();
-    } else if (uiState == UI_SET_TEMP) {
+    }
+
+    // ===== SET TEMP =====
+    else if (uiState == UI_SET_TEMP) {
       setTemp = constrain(setTemp + enc * 0.1, 30.0, 40.0);
       drawSetTemp();
-    } else if (uiState == UI_HEATER_MODE) {
+    }
+
+    // ===== HEATER MODE =====
+    else if (uiState == UI_HEATER_MODE) {
       heaterModeIndex = (heaterModeIndex + enc + 2) % 2;
       drawHeaterMode();
-    } else if (uiState == UI_MANUAL_HEATER) {
+    }
+
+    // ===== MANUAL HEATER =====
+    else if (uiState == UI_MANUAL_HEATER) {
       manualSelectIndex = (manualSelectIndex + enc + 2) % 2;
       drawManualHeater();
-    } else if (uiState == UI_HYSTERESIS) {
+    }
+
+    // ===== HYSTERESIS =====
+    else if (uiState == UI_HYSTERESIS) {
       hysteresis = constrain(hysteresis + enc * 0.1, 0.1, 1.0);
       drawHysteresis();
     }
@@ -456,39 +727,119 @@ void loop() {
   if (button.isPressed()) {
     lastUiActivity = millis();
 
+    // ===== HOME =====
     if (uiState == UI_HOME) {
       uiState = UI_MENU;
       drawMenu();
     }
 
+    // ===== MAIN MENU =====
     else if (uiState == UI_MENU) {
-      if (menuIndex == 0) {           // Status
+      if (menuIndex == 0) {
+        incubationMenuIndex = 0;
+        uiState = UI_INCUBATION_MENU;
+        drawIncubationMenu();
+      } else if (menuIndex == 1) {
         uiState = UI_STATUS;
         drawStatus();
-      } else if (menuIndex == 1) {    // WiFi
+      } else if (menuIndex == 2) {
         wifiMenuIndex = 0;
         uiState = UI_WIFI_MENU;
         drawWifiMenu();
-      } else if (menuIndex == 2) {    // Settings
+      } else if (menuIndex == 3) {
         settingsIndex = 0;
         uiState = UI_SETTINGS;
         drawSettings();
-      } else {                        // Back
+      } else {
         uiState = UI_HOME;
         drawHome();
       }
     }
 
+    // ===== INCUBATION MENU =====
+    else if (uiState == UI_INCUBATION_MENU) {
+      if (incubationMenuIndex == 0) {  // Start
+        editDay = timeinfo.tm_mday;
+        editMonth = timeinfo.tm_mon + 1;
+        editYear = timeinfo.tm_year + 1900;
+        editHour = timeinfo.tm_hour;
+        editMinute = timeinfo.tm_min;
+
+        incubationStartIndex = 0;
+        uiState = UI_INCUBATION_START;
+        drawIncubationStart();
+      } else if (incubationMenuIndex == 1) {  // Info
+        uiState = UI_INCUBATION_INFO;
+        drawIncubationInfo();
+      } else if (incubationMenuIndex == 2) {  // Reset
+        incubationStarted = false;
+        incubationDay = 0;
+        saveSettingsToEEPROM();
+        drawIncubationMenu();
+      } else {
+        uiState = UI_MENU;
+        drawMenu();
+      }
+    }
+
+    // ===== INCUBATION START =====
+    else if (uiState == UI_INCUBATION_START) {
+
+      if (incubationStartIndex == 0) {  // EDIT
+        editField = EDIT_DAY;
+        uiState = UI_EDIT_START_DATETIME;
+        drawEditStartDateTime();
+      }
+
+      else if (incubationStartIndex == 1) {  // START
+        confirmStartIndex = 0;               // default to CONFIRM
+        uiState = UI_CONFIRM_START;          // ✅ GO TO CONFIRM SCREEN
+        drawConfirmStart();
+      }
+
+      else {  // BACK
+        uiState = UI_INCUBATION_MENU;
+        drawIncubationMenu();
+      }
+    }
+
+
+    // ===== EDIT DATE & TIME =====
+    else if (uiState == UI_EDIT_START_DATETIME) {
+      editField = (EditField)(editField + 1);
+      if (editField == EDIT_DONE) {
+        uiState = UI_CONFIRM_START;
+        drawConfirmStart();
+      } else {
+        drawEditStartDateTime();
+      }
+    }
+    // ===== CONFIRM START =====
+    else if (uiState == UI_CONFIRM_START) {
+      if (confirmStartIndex == 0) {  // CONFIRM
+        startIncubationFromEdit();
+        updateIncubationDay();  // ✅ SAFETY
+        uiState = UI_INCUBATION_INFO;
+        drawIncubationInfo();
+      } else {
+        uiState = UI_INCUBATION_START;
+        drawIncubationStart();
+      }
+    } else if (uiState == UI_INCUBATION_INFO) {
+      uiState = UI_INCUBATION_MENU;
+      drawIncubationMenu();
+    }
+    // ===== STATUS =====
     else if (uiState == UI_STATUS) {
       uiState = UI_MENU;
       drawMenu();
     }
-
+    // ===== WIFI MENU =====
     else if (uiState == UI_WIFI_MENU) {
       if (wifiMenuIndex == 0) {
         wm.startConfigPortal("EggIncubator_Setup");
         drawWifiMenu();
-      } else if (wifiMenuIndex == 1) {   // Status
+      } else if (wifiMenuIndex == 1) {
         uiState = UI_STATUS;
         drawStatus();
       } else {
@@ -497,6 +848,7 @@ void loop() {
       }
     }
 
+    // ===== SETTINGS =====
     else if (uiState == UI_SETTINGS) {
       if (settingsIndex == 0) {
         uiState = UI_SET_TEMP;
@@ -514,6 +866,7 @@ void loop() {
       }
     }
 
+    // ===== HEATER MODE =====
     else if (uiState == UI_HEATER_MODE) {
       heaterMode = heaterModeIndex == 0 ? HEATER_AUTO : HEATER_MANUAL;
       saveSettingsToEEPROM();
@@ -528,6 +881,7 @@ void loop() {
       }
     }
 
+    // ===== MANUAL HEATER =====
     else if (uiState == UI_MANUAL_HEATER) {
       manualHeaterOn = (manualSelectIndex == 1);
       saveSettingsToEEPROM();
@@ -535,12 +889,14 @@ void loop() {
       drawSettings();
     }
 
+    // ===== SET TEMP =====
     else if (uiState == UI_SET_TEMP) {
       saveSettingsToEEPROM();
       uiState = UI_SETTINGS;
       drawSettings();
     }
 
+    // ===== HYSTERESIS =====
     else if (uiState == UI_HYSTERESIS) {
       saveSettingsToEEPROM();
       uiState = UI_SETTINGS;
@@ -548,8 +904,9 @@ void loop() {
     }
   }
 
-  // ---------- UI timeout ----------
-  if (uiState != UI_HOME && millis() - lastUiActivity > UI_TIMEOUT) {
+  // ---------- UI timeout (protect edit screens) ----------
+  if (uiState != UI_HOME && uiState != UI_EDIT_START_DATETIME && uiState != UI_CONFIRM_START && millis() - lastUiActivity > UI_TIMEOUT) {
+
     uiState = UI_HOME;
     drawHome();
   }

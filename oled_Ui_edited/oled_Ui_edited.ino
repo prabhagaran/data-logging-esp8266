@@ -17,12 +17,12 @@
 // ================= EEPROM =================
 #define EEPROM_SIZE 64
 
-#define ADDR_SET_TEMP 0      // float (4 bytes)
-#define ADDR_HYSTERESIS 4    // float (4 bytes)
-#define ADDR_HEATER_MODE 8   // uint8_t
-#define ADDR_MANUAL_STATE 9  // uint8_t
-#define ADDR_INCUBATION_STARTED  10   // uint8_t
-#define ADDR_INCUBATION_EPOCH    11   // time_t (4 bytes on ESP8266)
+#define ADDR_SET_TEMP 0             // float (4 bytes)
+#define ADDR_HYSTERESIS 4           // float (4 bytes)
+#define ADDR_HEATER_MODE 8          // uint8_t
+#define ADDR_MANUAL_STATE 9         // uint8_t
+#define ADDR_INCUBATION_STARTED 10  // uint8_t
+#define ADDR_INCUBATION_EPOCH 11    // time_t (4 bytes on ESP8266)
 
 
 uint8_t eepromHeaterMode = 0;
@@ -84,6 +84,7 @@ enum UiState {
 
   UI_STATUS,
   UI_WIFI_MENU,
+  UI_WIFI_STATUS,
   UI_SETTINGS,
   UI_SET_TEMP,
   UI_HEATER_MODE,
@@ -230,6 +231,51 @@ void loadSettingsFromEEPROM() {
   EEPROM.get(ADDR_INCUBATION_EPOCH, incubationStartEpoch);
 
   updateIncubationDay();  // 🔑 recompute derived value
+}
+
+const char* wifiQuality(int rssi) {
+  if (rssi >= -55) return "EXCELLENT";
+  if (rssi >= -65) return "GOOD";
+  if (rssi >= -75) return "FAIR";
+  return "POOR";
+}
+
+void drawWifiStatus() {
+  drawHeader("WIFI STATUS");
+
+  bool connected = (WiFi.status() == WL_CONNECTED);
+
+  display.setCursor(0, 14);
+  display.print("State : ");
+  display.println(connected ? "CONNECTED" : "DISCONNECTED");
+
+  display.setCursor(0, 24);
+  display.print("SSID  : ");
+  display.println(connected ? WiFi.SSID() : "--");
+
+  display.setCursor(0, 34);
+  display.print("IP    : ");
+  if (connected)
+    display.println(WiFi.localIP());
+  else
+    display.println("--");
+
+  display.setCursor(0, 44);
+  display.print("RSSI  : ");
+  if (connected) {
+    int rssi = WiFi.RSSI();
+    display.print(rssi);
+    display.print(" ");
+    display.println(wifiQuality(rssi));
+  } else {
+    display.println("--");
+  }
+
+  display.setCursor(0, 54);
+  display.print("Time  : ");
+  display.println(timeValid ? "SYNCED" : "NOT SYNCED");
+
+  display.display();
 }
 
 
@@ -854,17 +900,22 @@ void loop() {
     }
     // ===== WIFI MENU =====
     else if (uiState == UI_WIFI_MENU) {
-      if (wifiMenuIndex == 0) {
+      if (wifiMenuIndex == 0) {  // Connect
         wm.startConfigPortal("EggIncubator_Setup");
         drawWifiMenu();
-      } else if (wifiMenuIndex == 1) {
-        uiState = UI_STATUS;
-        drawStatus();
-      } else {
+      } else if (wifiMenuIndex == 1) {  // WiFi Status
+        lastUiActivity = millis();
+        uiState = UI_WIFI_STATUS;
+        drawWifiStatus();
+      } else {  // Back
         uiState = UI_MENU;
         drawMenu();
       }
+    } else if (uiState == UI_WIFI_STATUS) {
+      uiState = UI_WIFI_MENU;
+      drawWifiMenu();
     }
+
 
     // ===== SETTINGS =====
     else if (uiState == UI_SETTINGS) {
@@ -923,9 +974,12 @@ void loop() {
   }
 
   // ---------- UI timeout (protect edit screens) ----------
-  if (uiState != UI_HOME && uiState != UI_EDIT_START_DATETIME && uiState != UI_CONFIRM_START && millis() - lastUiActivity > UI_TIMEOUT) {
+  // ---------- UI timeout (protect edit & info screens) ----------
+  if (uiState != UI_HOME && uiState != UI_EDIT_START_DATETIME && uiState != UI_CONFIRM_START && uiState != UI_WIFI_STATUS &&  // ✅ ADD THIS LINE
+      millis() - lastUiActivity > UI_TIMEOUT) {
 
     uiState = UI_HOME;
     drawHome();
-  }
+  
+}
 }

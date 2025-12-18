@@ -326,42 +326,102 @@ void drawHeader(const char* title) {
 
 // ================= OLED SCREENS =================
 void drawHome() {
-  drawHeader("EGG INCUBATOR");
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
 
-  display.setCursor(0, 14);
-  display.print("Temp  : ");
-  if (sensorValid) display.print(liveTemp, 1), display.print(" C");
-  else display.print("SENSOR ERR");
-
-  display.setCursor(0, 24);
-  display.print("Hum   : ");
-  display.print(liveHum, 0);
-  display.print(" %");
-
-  display.setCursor(0, 34);
-  display.print("Mode  : ");
-  display.print(heaterMode == HEATER_AUTO ? "AUTO" : "MANUAL");
-
-  display.setCursor(0, 44);
-  display.print("Heater: ");
-  display.print(heaterOn ? "ON" : "OFF");
-
-  display.setCursor(0, 54);
-  display.print("WiFi  : ");
-  display.print(WiFi.status() == WL_CONNECTED ? "CONNECTED" : "DISCONNECTED");
+  // ---------- Date & Time (Top Left) ----------
   if (timeValid) {
-    char timeStr[10];
-    sprintf(timeStr, "%02d:%02d",
-            timeinfo.tm_hour,
-            timeinfo.tm_min);
+    struct tm t = timeinfo;
 
-    display.setCursor(90, 0);
-    display.print(timeStr);
+    const char* months[] = {
+      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    };
+
+    display.setCursor(0, 0);
+    display.printf("%02d-%s  %02d:%02d",
+                   t.tm_mday,
+                   months[t.tm_mon],
+                   t.tm_hour,
+                   t.tm_min);
+  } else {
+    display.setCursor(0, 0);
+    display.print("-- ---  --:--");
   }
 
+  // ---------- WiFi Signal Bars (Top Right) ----------
+  if (WiFi.status() == WL_CONNECTED) {
+    int rssi = WiFi.RSSI();
+    int bars = 0;
+
+    if (rssi > -55) bars = 4;
+    else if (rssi > -65) bars = 3;
+    else if (rssi > -75) bars = 2;
+    else if (rssi > -85) bars = 1;
+
+    int x = 110;
+    for (int i = 0; i < bars; i++) {
+      display.fillRect(x + i * 4, 8 - i * 2, 3, i * 2 + 2, SSD1306_WHITE);
+    }
+  }
+  // ---------- HEADER SEPARATOR LINE (ADD THIS) ----------
+  display.drawLine(0, 12, 127, 12, SSD1306_WHITE);
+  // ---------- Temperature & Humidity ----------
+  display.setCursor(0, 16);
+  display.print("T : ");
+  if (sensorValid) {
+    display.print(liveTemp, 1);
+    display.print((char)247);
+    display.print("C");
+  } else {
+    display.print("SENSOR ERR");
+  }
+
+  display.setCursor(80, 16);
+  display.print("H :--%");
+
+  // ---------- Heater Status ----------
+  display.setCursor(0, 28);
+  display.print("Heater: ");
+  display.print(heaterOn ? "ON " : "OFF");
+  display.print(" ");
+  display.print(heaterMode == HEATER_AUTO ? "AUTO" : "MAN");
+
+  // ---------- Incubation Day ----------
+  display.setCursor(0, 40);
+  display.print("Day  : ");
+  if (incubationStarted) {
+    if (incubationDay < 10) display.print("0");
+    display.print(incubationDay);
+    display.print(" / 21");
+  } else {
+    display.print("--");
+  }
+
+  // ---------- Hatch Date ----------
+  display.setCursor(0, 52);
+  display.print("Hatch: ");
+  if (incubationStarted) {
+    time_t hatchEpoch = incubationStartEpoch + (INCUBATION_DAYS * 86400UL);
+    struct tm hatchTm;
+    localtime_r(&hatchEpoch, &hatchTm);
+
+    const char* months[] = {
+      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    };
+
+    display.printf("%02d-%s",
+                   hatchTm.tm_mday,
+                   months[hatchTm.tm_mon]);
+  } else {
+    display.print("--");
+  }
 
   display.display();
 }
+
 
 void drawConfirmStart() {
   drawHeader("CONFIRM START");

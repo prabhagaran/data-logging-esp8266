@@ -87,7 +87,7 @@ enum UiState {
   UI_WIFI_MENU,
   UI_WIFI_STATUS,
   UI_SETTINGS,
-    UI_HEATER_MODE,
+  UI_HEATER_MODE,
   UI_MANUAL_HEATER,
   UI_HYSTERESIS,
   UI_EDIT_TEMPERATURE,
@@ -841,14 +841,6 @@ void drawSettings() {
   display.display();
 }
 
-void drawSetTemp() {
-  drawHeader("SET TEMP");
-  display.setCursor(0, 32);
-  display.print("Target: ");
-  display.print(setTemp, 1);
-  display.print(" C");
-  display.display();
-}
 void drawEditTemperature() {
   drawHeader("EDIT TEMPERATURE");
 
@@ -1302,18 +1294,18 @@ void loop() {
     }
 
     // ===== CONFIRM TEMPERATURE =====
-else if (uiState == UI_CONFIRM_TEMPERATURE) {
+    else if (uiState == UI_CONFIRM_TEMPERATURE) {
 
-  if (confirmStartIndex == 0) {   // CONFIRM
-    setTemp     = editTargetTemp;
-    maxSafeTemp = editMaxSafeTemp;
-    minSafeTemp = editMinSafeTemp;
-    saveSettingsToEEPROM();
-  }
+      if (confirmStartIndex == 0) {  // CONFIRM
+        setTemp = editTargetTemp;
+        maxSafeTemp = editMaxSafeTemp;
+        minSafeTemp = editMinSafeTemp;
+        saveSettingsToEEPROM();
+      }
 
-  uiState = UI_SETTINGS;
-  drawSettings();
-}
+      uiState = UI_SETTINGS;
+      drawSettings();
+    }
 
 
     // ===== HEATER MODE =====

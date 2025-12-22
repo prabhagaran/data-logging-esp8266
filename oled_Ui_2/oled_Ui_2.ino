@@ -152,7 +152,7 @@ float editMinSafeTemp;
 #define INCUBATION_DAYS 21
 
 bool incubationStarted = false;
-time_t incubationStartEpoch = 0;
+uint32_t incubationStartEpoch = 0;
 uint8_t incubationDay = 0;
 
 // -------- Edit start date & time --------
@@ -425,19 +425,20 @@ void drawWifiStatus() {
 
 
 void updateIncubationDay() {
-  if (!incubationStarted) {
+  if (!incubationStarted || !timeValid) {
     incubationDay = 0;
     return;
   }
 
-  time_t nowEpoch = time(nullptr);
+  uint32_t nowEpoch = (uint32_t)time(nullptr);
   time_t elapsed = nowEpoch - incubationStartEpoch;
 
-  if (elapsed < 0) elapsed = 0;  // safety
+  if (elapsed < 0) elapsed = 0;
 
   uint16_t daysPassed = elapsed / 86400;
-  incubationDay = constrain(daysPassed + 1, 1, 21);
+  incubationDay = constrain(daysPassed + 1, 1, INCUBATION_DAYS);
 }
+
 
 void saveSettingsToEEPROM() {
   eepromHeaterMode = (uint8_t)heaterMode;
@@ -646,7 +647,9 @@ void drawIncubationInfo() {
 
   // Convert start epoch to date
   struct tm startTm;
-  localtime_r(&incubationStartEpoch, &startTm);
+  time_t t = (time_t)incubationStartEpoch;  // 🔑 convert safely
+  localtime_r(&t, &startTm);
+
 
   uint8_t sDay = startTm.tm_mday;
   uint8_t sMonth = startTm.tm_mon + 1;
@@ -926,18 +929,28 @@ bool updateTime(struct tm& timeinfo) {
 }
 
 void startIncubationFromEdit() {
-  struct tm t;
+  struct tm t = {};  // 🔒 ZERO INITIALIZE
+
   t.tm_mday = editDay;
   t.tm_mon = editMonth - 1;
   t.tm_year = editYear - 1900;
   t.tm_hour = editHour;
   t.tm_min = editMinute;
   t.tm_sec = 0;
+  t.tm_isdst = -1;  // 🔑 let system decide DST
 
-  incubationStartEpoch = mktime(&t);
+  time_t epoch = mktime(&t);
+
+  // 🔒 Reject invalid epoch
+  if (epoch < 1700000000UL || epoch > 2200000000UL) {
+    incubationStarted = false;
+    return;
+  }
+
+  incubationStartEpoch = epoch;
   incubationStarted = true;
 
-  updateIncubationDay();  // ✅ ADD THIS LINE
+  updateIncubationDay();
   saveSettingsToEEPROM();
 }
 
@@ -951,6 +964,11 @@ void setup() {
   pinMode(DT_PIN, INPUT);
   pinMode(SW_PIN, INPUT);
   pinMode(HEATER_PIN, OUTPUT);
+  digitalWrite(HEATER_PIN, LOW);
+  heaterOn = false;
+  manualHeaterOn = false;
+
+
 
   button.setDebounceTime(50);
 
@@ -962,6 +980,12 @@ void setup() {
   sensors.setWaitForConversion(false);
 
   loadSettingsFromEEPROM();
+  Serial.println("EEPROM DEBUG");
+  Serial.print("Started : ");
+  Serial.println(incubationStarted);
+  Serial.print("Epoch   : ");
+  Serial.println(incubationStartEpoch);
+
 
   prev_CLK_state = digitalRead(CLK_PIN);
   lastUiActivity = millis();
@@ -1160,11 +1184,21 @@ void loop() {
     // ===== INCUBATION MENU =====
     else if (uiState == UI_INCUBATION_MENU) {
       if (incubationMenuIndex == 0) {  // Start
-        editDay = timeinfo.tm_mday;
-        editMonth = timeinfo.tm_mon + 1;
-        editYear = timeinfo.tm_year + 1900;
-        editHour = timeinfo.tm_hour;
-        editMinute = timeinfo.tm_min;
+
+        if (!timeValid) {
+          // 🔒 Safe defaults if NTP not ready
+          editDay = 1;
+          editMonth = 1;
+          editYear = 2025;
+          editHour = 0;
+          editMinute = 0;
+        } else {
+          editDay = timeinfo.tm_mday;
+          editMonth = timeinfo.tm_mon + 1;
+          editYear = timeinfo.tm_year + 1900;
+          editHour = timeinfo.tm_hour;
+          editMinute = timeinfo.tm_min;
+        }
 
         incubationStartIndex = 0;
         uiState = UI_INCUBATION_START;
@@ -1175,9 +1209,12 @@ void loop() {
       } else if (incubationMenuIndex == 2) {  // Reset
         incubationStarted = false;
         incubationDay = 0;
+        incubationStartEpoch = 0;  // 🔒 CLEAR STORED TIME
         saveSettingsToEEPROM();
         drawIncubationMenu();
-      } else {
+      }
+
+      else {
         uiState = UI_MENU;
         drawMenu();
       }

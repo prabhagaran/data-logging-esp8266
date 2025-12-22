@@ -29,6 +29,8 @@
 #define ADDR_INCUBATION_EPOCH 12  // uint32_t (4 bytes)
 #define ADDR_MAX_SAFE_TEMP 16
 #define ADDR_MIN_SAFE_TEMP 20
+#define ADDR_ALARMS_ENABLED 24  // uint8_t
+
 
 
 
@@ -96,7 +98,9 @@ enum UiState {
   UI_HYSTERESIS,
   UI_EDIT_TEMPERATURE,
   UI_CONFIRM_TEMPERATURE,
+  UI_ALARM_SETTINGS,
   UI_ALARM
+
 };
 UiState uiState = UI_HOME;
 
@@ -131,7 +135,7 @@ TempEditField tempEditField = EDIT_TARGET_TEMP;
 const char* menuItems[] = { "Incubation", "Status", "WiFi", "Settings", "Back" };
 const char* incubationMenuItems[] = { "Start", "Info", "Reset", "Back" };
 const char* wifiMenuItems[] = { "Connect", "Status", "Back" };
-const char* settingsItems[] = { "Set Temperature", "Heater Mode", "Hysteresis", "Back" };
+const char* settingsItems[] = { "Set Temperature", "Heater Mode", "Hysteresis", "Alarms", "Back" };
 const char* heaterModeItems[] = { "AUTO", "MANUAL" };
 
 int menuIndex = 0;
@@ -144,6 +148,8 @@ int confirmStartIndex = 0;                      // 0 = CONFIRM, 1 = CANCEL
 uint8_t statusPage = 0;                         // 0 = Page 1, 1 = Page 2
 const unsigned long UI_REFRESH_INTERVAL = 500;  // ms
 unsigned long lastUiRefresh = 0;
+bool alarmsEnabled = true;
+
 
 // ===== Manual Heater =====
 int manualSelectIndex = 0;  // 0=OFF 1=ON
@@ -275,6 +281,12 @@ void updateHeaterControl() {
   }
 }
 void updateAlarms() {
+
+  if (!alarmsEnabled) {
+    activeAlarm = ALARM_NONE;
+    return;
+  }
+
   if (!sensorValid) {
     activeAlarm = ALARM_SENSOR_FAULT;
     return;
@@ -293,9 +305,14 @@ void updateAlarms() {
   activeAlarm = ALARM_NONE;
 }
 
+
 void updateAlarmFSM() {
 
   // activeAlarm is already set by updateAlarms()
+  if (!alarmsEnabled) {
+    alarmState = ALARM_STATE_NONE;
+    return;
+  }
 
   switch (alarmState) {
 
@@ -370,6 +387,7 @@ void loadSettingsFromEEPROM() {
     incubationStarted = false;
     incubationStartEpoch = 0;
     incubationDay = 0;
+    alarmsEnabled = true;  // 🔔 DEFAULT ENABLED
 
     // -------- Write defaults + version --------
     EEPROM.put(ADDR_EEPROM_VERSION, EEPROM_VERSION);
@@ -431,6 +449,11 @@ void loadSettingsFromEEPROM() {
   incubationStarted = (incStarted == 1);
 
   EEPROM.get(ADDR_INCUBATION_EPOCH, incubationStartEpoch);
+
+  uint8_t alarmEn = 1;
+  EEPROM.get(ADDR_ALARMS_ENABLED, alarmEn);
+  alarmsEnabled = (alarmEn <= 1) ? alarmEn : true;
+
 
   /* =========================================================
    * DERIVED RUNTIME CALCULATIONS
@@ -515,6 +538,8 @@ void saveSettingsToEEPROM() {
   EEPROM.put(ADDR_HEATER_MODE, eepromHeaterMode);
   EEPROM.put(ADDR_MANUAL_STATE, eepromManualState);
   EEPROM.put(ADDR_INCUBATION_STARTED, (uint8_t)incubationStarted);
+  EEPROM.put(ADDR_ALARMS_ENABLED, (uint8_t)alarmsEnabled);
+
 
   // ================= MULTI-BYTE VALUES =================
   EEPROM.put(ADDR_SET_TEMP, setTemp);
@@ -634,6 +659,18 @@ void drawHome() {
   } else {
     display.print("--");
   }
+
+  display.display();
+}
+
+void drawAlarmSettings() {
+  drawHeader("ALARM SETTINGS");
+
+  display.setCursor(0, 28);
+  display.print(alarmsEnabled ? "> ENABLED" : "  ENABLED");
+
+  display.setCursor(0, 40);
+  display.print(!alarmsEnabled ? "> DISABLED" : "  DISABLED");
 
   display.display();
 }
@@ -957,7 +994,7 @@ void drawWifiMenu() {
 
 void drawSettings() {
   drawHeader("SETTINGS");
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < 5; i++) {
     display.setCursor(0, 14 + i * 10);
     display.print(i == settingsIndex ? "> " : "  ");
     display.println(settingsItems[i]);
@@ -1155,11 +1192,11 @@ void loop() {
     }
   }
 
-  // ---------- Force alarm UI ----------
-  if (alarmState != ALARM_STATE_NONE) {
+  // ---------- Force alarm UI ONLY when enabled ----------
+  if (alarmState != ALARM_STATE_NONE && alarmsEnabled) {
     uiState = UI_ALARM;
     drawAlarmScreen();
-    return;  // 🔒 Block rest of loop
+    return;
   }
 
   unsigned long now = millis();
@@ -1239,7 +1276,7 @@ void loop() {
 
     // ===== SETTINGS =====
     else if (uiState == UI_SETTINGS) {
-      settingsIndex = (settingsIndex + enc + 4) % 4;
+      settingsIndex = (settingsIndex + enc + 5) % 5;
       drawSettings();
     }
 
@@ -1284,6 +1321,9 @@ void loop() {
     } else if (uiState == UI_CONFIRM_TEMPERATURE) {
       confirmStartIndex = (confirmStartIndex + enc + 2) % 2;
       drawConfirmTemperature();
+    } else if (uiState == UI_ALARM_SETTINGS) {
+      alarmsEnabled = !alarmsEnabled;
+      drawAlarmSettings();
     }
   }
 
@@ -1298,11 +1338,18 @@ void loop() {
       updateAlarmFSM();  // sync FSM
 
       // Clear alarm ONLY if problem is gone
+      // Clear alarm ONLY if problem is gone
       if (activeAlarm == ALARM_NONE) {
         alarmState = ALARM_STATE_NONE;
+
+        // 🔒 Safety reset (important)
+        heaterOn = false;
+        digitalWrite(HEATER_PIN, LOW);
+
         uiState = UI_HOME;
         drawHome();
       }
+
 
       return;  // 🔒 block all other buttons
     }
@@ -1467,10 +1514,17 @@ void loop() {
       } else if (settingsIndex == 2) {
         uiState = UI_HYSTERESIS;
         drawHysteresis();
+      } else if (settingsIndex == 3) {  // 🔔 ALARMS
+        uiState = UI_ALARM_SETTINGS;
+        drawAlarmSettings();
       } else {
         uiState = UI_MENU;
         drawMenu();
       }
+    } else if (uiState == UI_ALARM_SETTINGS) {
+      saveSettingsToEEPROM();
+      uiState = UI_SETTINGS;
+      drawSettings();
     }
 
     // ===== EDIT TEMPERATURE =====

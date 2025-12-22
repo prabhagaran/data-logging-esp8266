@@ -19,16 +19,16 @@
 
 #define EEPROM_VERSION 1
 #define ADDR_EEPROM_VERSION 0
-   // uint8_t (1 byte)
+// uint8_t (1 byte)
 
-#define ADDR_SET_TEMP            1   // float (4 bytes)
-#define ADDR_HYSTERESIS          5
-#define ADDR_HEATER_MODE         9
-#define ADDR_MANUAL_STATE        10
-#define ADDR_INCUBATION_STARTED  11
-#define ADDR_INCUBATION_EPOCH    12  // uint32_t (4 bytes)
-#define ADDR_MAX_SAFE_TEMP       16
-#define ADDR_MIN_SAFE_TEMP       20
+#define ADDR_SET_TEMP 1  // float (4 bytes)
+#define ADDR_HYSTERESIS 5
+#define ADDR_HEATER_MODE 9
+#define ADDR_MANUAL_STATE 10
+#define ADDR_INCUBATION_STARTED 11
+#define ADDR_INCUBATION_EPOCH 12  // uint32_t (4 bytes)
+#define ADDR_MAX_SAFE_TEMP 16
+#define ADDR_MIN_SAFE_TEMP 20
 
 
 
@@ -96,6 +96,7 @@ enum UiState {
   UI_HYSTERESIS,
   UI_EDIT_TEMPERATURE,
   UI_CONFIRM_TEMPERATURE,
+  UI_ALARM
 };
 UiState uiState = UI_HOME;
 
@@ -106,6 +107,15 @@ enum AlarmType {
   ALARM_UNDER_TEMP
 };
 AlarmType activeAlarm = ALARM_NONE;
+
+enum AlarmState {
+  ALARM_STATE_NONE,
+  ALARM_STATE_ACTIVE,
+  ALARM_STATE_LATCHED
+};
+
+AlarmState alarmState = ALARM_STATE_NONE;
+
 
 enum TempEditField {
   EDIT_TARGET_TEMP,
@@ -283,6 +293,41 @@ void updateAlarms() {
   activeAlarm = ALARM_NONE;
 }
 
+void updateAlarmFSM() {
+
+  // activeAlarm is already set by updateAlarms()
+
+  switch (alarmState) {
+
+    case ALARM_STATE_NONE:
+      if (activeAlarm != ALARM_NONE) {
+        alarmState = ALARM_STATE_ACTIVE;
+      }
+      break;
+
+    case ALARM_STATE_ACTIVE:
+      // Critical alarms become latched
+      if (activeAlarm == ALARM_SENSOR_FAULT || activeAlarm == ALARM_OVER_TEMP) {
+        alarmState = ALARM_STATE_LATCHED;
+      }
+      // Under-temp auto clears
+      else if (activeAlarm == ALARM_NONE) {
+        alarmState = ALARM_STATE_NONE;
+      }
+      break;
+
+    case ALARM_STATE_LATCHED:
+      // Stay latched until ACK + condition cleared
+      break;
+  }
+
+  // 🔒 Force heater OFF ONLY for critical alarms
+  if (alarmState == ALARM_STATE_LATCHED) {
+    heaterOn = false;
+    digitalWrite(HEATER_PIN, LOW);
+  }
+}
+
 
 /**
  * @brief Load all persisted user and system settings from EEPROM
@@ -328,7 +373,7 @@ void loadSettingsFromEEPROM() {
 
     // -------- Write defaults + version --------
     EEPROM.put(ADDR_EEPROM_VERSION, EEPROM_VERSION);
-    saveSettingsToEEPROM();   // commits EEPROM
+    saveSettingsToEEPROM();  // commits EEPROM
     return;
   }
 
@@ -444,7 +489,7 @@ void drawWifiStatus() {
 
 void updateIncubationDay() {
   if (!incubationStarted || !timeValid || incubationStartEpoch == 0) {
-    return;   // 🔒 do NOT force reset repeatedly
+    return;  // 🔒 do NOT force reset repeatedly
   }
 
   uint32_t nowEpoch = (uint32_t)time(nullptr);
@@ -464,7 +509,7 @@ void saveSettingsToEEPROM() {
   EEPROM.put(ADDR_EEPROM_VERSION, EEPROM_VERSION);
 
   // ================= SMALL FLAGS =================
-  eepromHeaterMode  = (uint8_t)heaterMode;
+  eepromHeaterMode = (uint8_t)heaterMode;
   eepromManualState = manualHeaterOn ? 1 : 0;
 
   EEPROM.put(ADDR_HEATER_MODE, eepromHeaterMode);
@@ -612,7 +657,60 @@ void drawConfirmStart() {
   display.display();
 }
 
+void drawAlarmScreen() {
 
+  static bool blink = false;
+  static unsigned long lastBlink = 0;
+
+  if (millis() - lastBlink > 500) {
+    blink = !blink;
+    lastBlink = millis();
+  }
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  if (blink || alarmState == ALARM_STATE_LATCHED) {
+    display.setCursor(0, 0);
+    display.println(
+      activeAlarm == ALARM_UNDER_TEMP ? "WARNING" : "!!! ALARM !!!");
+  }
+
+  display.drawLine(0, 10, 127, 10, SSD1306_WHITE);
+
+  display.setCursor(0, 16);
+
+  switch (activeAlarm) {
+
+    case ALARM_SENSOR_FAULT:
+      display.println("SENSOR FAILURE");
+      display.println("Temp sensor err");
+      display.println("Heater: OFF");
+      display.setCursor(0, 52);
+      display.println("Fix sensor & ACK");
+      break;
+
+    case ALARM_OVER_TEMP:
+      display.println("OVER TEMPERATURE");
+      display.printf("Temp: %.1f C\n", liveTemp);
+      display.println("Heater: OFF");
+      display.setCursor(0, 52);
+      display.println("Cooling... ACK");
+      break;
+
+    case ALARM_UNDER_TEMP:
+      display.println("LOW TEMPERATURE");
+      display.printf("Temp: %.1f C\n", liveTemp);
+      display.println("Heating...");
+      break;
+
+    default:
+      break;
+  }
+
+  display.display();
+}
 
 void drawMenu() {
   drawHeader("MAIN MENU");
@@ -1040,10 +1138,28 @@ void loop() {
   }
 
   // ---------- Heater + screen refresh ----------
+  // ---------- Heater + Alarm refresh ----------
   if (millis() - lastHeaterUpdate > HEATER_INTERVAL) {
     lastHeaterUpdate = millis();
-    updateHeaterControl();
-    updateAlarms();
+
+    updateAlarms();    // 1️⃣ Detect alarm condition
+    updateAlarmFSM();  // 2️⃣ Update alarm state (NONE / ACTIVE / LATCHED)
+
+    if (alarmState == ALARM_STATE_LATCHED) {
+      // 🔒 Critical alarm → heater OFF
+      heaterOn = false;
+      digitalWrite(HEATER_PIN, LOW);
+    } else {
+      // ✅ Normal + UNDER_TEMP → heater allowed
+      updateHeaterControl();
+    }
+  }
+
+  // ---------- Force alarm UI ----------
+  if (alarmState != ALARM_STATE_NONE) {
+    uiState = UI_ALARM;
+    drawAlarmScreen();
+    return;  // 🔒 Block rest of loop
   }
 
   unsigned long now = millis();
@@ -1174,6 +1290,24 @@ void loop() {
   // ---------- Button ----------
   if (button.isPressed()) {
     lastUiActivity = millis();
+
+    // ================= ALARM ACK =================
+    if (uiState == UI_ALARM) {
+
+      updateAlarms();    // check current condition
+      updateAlarmFSM();  // sync FSM
+
+      // Clear alarm ONLY if problem is gone
+      if (activeAlarm == ALARM_NONE) {
+        alarmState = ALARM_STATE_NONE;
+        uiState = UI_HOME;
+        drawHome();
+      }
+
+      return;  // 🔒 block all other buttons
+    }
+
+
 
     // ===== HOME =====
     if (uiState == UI_HOME) {
@@ -1398,6 +1532,7 @@ void loop() {
       drawSettings();
     }
   }
+
 
   // ---------- UI timeout (protect edit screens) ----------
   // ---------- UI timeout (protect edit & info screens) ----------

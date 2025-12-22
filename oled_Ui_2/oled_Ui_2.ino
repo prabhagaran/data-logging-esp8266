@@ -17,14 +17,18 @@
 // ================= EEPROM =================
 #define EEPROM_SIZE 64
 
-#define ADDR_SET_TEMP 0             // float (4 bytes)
-#define ADDR_HYSTERESIS 4           // float (4 bytes)
-#define ADDR_HEATER_MODE 8          // uint8_t
-#define ADDR_MANUAL_STATE 9         // uint8_t
-#define ADDR_INCUBATION_STARTED 10  // uint8_t
-#define ADDR_INCUBATION_EPOCH 11    // time_t (4 bytes on ESP8266)
-#define ADDR_MAX_SAFE_TEMP 15       // float (4 bytes)
-#define ADDR_MIN_SAFE_TEMP 19       // float (4 bytes)
+#define EEPROM_VERSION 1
+#define ADDR_EEPROM_VERSION 0
+   // uint8_t (1 byte)
+
+#define ADDR_SET_TEMP            1   // float (4 bytes)
+#define ADDR_HYSTERESIS          5
+#define ADDR_HEATER_MODE         9
+#define ADDR_MANUAL_STATE        10
+#define ADDR_INCUBATION_STARTED  11
+#define ADDR_INCUBATION_EPOCH    12  // uint32_t (4 bytes)
+#define ADDR_MAX_SAFE_TEMP       16
+#define ADDR_MIN_SAFE_TEMP       20
 
 
 
@@ -299,6 +303,34 @@ void loadSettingsFromEEPROM() {
    * ========================================================= */
   EEPROM.begin(EEPROM_SIZE);
 
+  /* =========================================================
+   * EEPROM VERSION CHECK
+   * ========================================================= */
+  uint8_t storedVersion = 0xFF;
+  EEPROM.get(ADDR_EEPROM_VERSION, storedVersion);
+
+  if (storedVersion != EEPROM_VERSION) {
+    Serial.println("EEPROM version mismatch -> reset to defaults");
+
+    // -------- Defaults --------
+    setTemp = 37.5;
+    hysteresis = 0.3;
+
+    heaterMode = HEATER_AUTO;
+    manualHeaterOn = false;
+
+    maxSafeTemp = 39.5;
+    minSafeTemp = 35.0;
+
+    incubationStarted = false;
+    incubationStartEpoch = 0;
+    incubationDay = 0;
+
+    // -------- Write defaults + version --------
+    EEPROM.put(ADDR_EEPROM_VERSION, EEPROM_VERSION);
+    saveSettingsToEEPROM();   // commits EEPROM
+    return;
+  }
 
   /* =========================================================
    * LOAD USER CONFIGURATION
@@ -312,50 +344,38 @@ void loadSettingsFromEEPROM() {
   EEPROM.get(ADDR_MAX_SAFE_TEMP, maxSafeTemp);
   EEPROM.get(ADDR_MIN_SAFE_TEMP, minSafeTemp);
 
-
   /* =========================================================
    * SAFETY LIMIT VALIDATION (CRITICAL)
    * ========================================================= */
 
-  // Validate MAX safe temperature (upper alarm threshold)
   if (maxSafeTemp < 38.0 || maxSafeTemp > 42.0)
     maxSafeTemp = 39.5;
 
-  // Validate MIN safe temperature (lower alarm threshold)
   if (minSafeTemp < 30.0 || minSafeTemp > 37.0)
     minSafeTemp = 35.0;
 
-  // Ensure logical ordering: min must be at least 0.5°C below max
   if (minSafeTemp >= maxSafeTemp - 0.5)
     minSafeTemp = maxSafeTemp - 0.5;
-
 
   /* =========================================================
    * CONTROL SETPOINT VALIDATION
    * ========================================================= */
 
-  // Validate incubation temperature setpoint
   if (setTemp < 30.0 || setTemp > 40.0)
     setTemp = 37.5;
 
-  // Validate hysteresis band
   if (hysteresis < 0.1 || hysteresis > 1.0)
     hysteresis = 0.3;
-
 
   /* =========================================================
    * HEATER MODE RESTORATION
    * ========================================================= */
 
-  // Heater mode: 0 = AUTO, 1 = MANUAL
   if (eepromHeaterMode > 1)
     eepromHeaterMode = 0;
 
   heaterMode = (HeaterMode)eepromHeaterMode;
-
-  // Manual heater ON/OFF state
   manualHeaterOn = (eepromManualState == 1);
-
 
   /* =========================================================
    * INCUBATION STATE RESTORATION
@@ -365,17 +385,15 @@ void loadSettingsFromEEPROM() {
   EEPROM.get(ADDR_INCUBATION_STARTED, incStarted);
   incubationStarted = (incStarted == 1);
 
-  // Load stored incubation start epoch (Unix time)
   EEPROM.get(ADDR_INCUBATION_EPOCH, incubationStartEpoch);
-
 
   /* =========================================================
    * DERIVED RUNTIME CALCULATIONS
    * ========================================================= */
 
-  // Recompute current incubation day based on epoch
   updateIncubationDay();
 }
+
 
 
 const char* wifiQuality(int rssi) {
@@ -441,24 +459,29 @@ void updateIncubationDay() {
 
 
 void saveSettingsToEEPROM() {
-  eepromHeaterMode = (uint8_t)heaterMode;
+
+  // ================= EEPROM VERSION =================
+  EEPROM.put(ADDR_EEPROM_VERSION, EEPROM_VERSION);
+
+  // ================= SMALL FLAGS =================
+  eepromHeaterMode  = (uint8_t)heaterMode;
   eepromManualState = manualHeaterOn ? 1 : 0;
 
-  EEPROM.put(ADDR_SET_TEMP, setTemp);
-  EEPROM.put(ADDR_HYSTERESIS, hysteresis);
   EEPROM.put(ADDR_HEATER_MODE, eepromHeaterMode);
   EEPROM.put(ADDR_MANUAL_STATE, eepromManualState);
-
-  // ✅ ADD THESE TWO LINES
   EEPROM.put(ADDR_INCUBATION_STARTED, (uint8_t)incubationStarted);
-  EEPROM.put(ADDR_INCUBATION_EPOCH, incubationStartEpoch);
 
+  // ================= MULTI-BYTE VALUES =================
+  EEPROM.put(ADDR_SET_TEMP, setTemp);
+  EEPROM.put(ADDR_HYSTERESIS, hysteresis);
+  EEPROM.put(ADDR_INCUBATION_EPOCH, incubationStartEpoch);
   EEPROM.put(ADDR_MAX_SAFE_TEMP, maxSafeTemp);
   EEPROM.put(ADDR_MIN_SAFE_TEMP, minSafeTemp);
 
-
   EEPROM.commit();
 }
+
+
 
 
 

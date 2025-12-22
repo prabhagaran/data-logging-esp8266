@@ -425,19 +425,19 @@ void drawWifiStatus() {
 
 
 void updateIncubationDay() {
-  if (!incubationStarted || !timeValid) {
-    incubationDay = 0;
-    return;
+  if (!incubationStarted || !timeValid || incubationStartEpoch == 0) {
+    return;   // 🔒 do NOT force reset repeatedly
   }
 
   uint32_t nowEpoch = (uint32_t)time(nullptr);
-  time_t elapsed = nowEpoch - incubationStartEpoch;
+  int32_t elapsed = (int32_t)(nowEpoch - incubationStartEpoch);
 
   if (elapsed < 0) elapsed = 0;
 
   uint16_t daysPassed = elapsed / 86400;
   incubationDay = constrain(daysPassed + 1, 1, INCUBATION_DAYS);
 }
+
 
 
 void saveSettingsToEEPROM() {
@@ -551,7 +551,7 @@ void drawHome() {
   display.setCursor(0, 52);
   display.print("Hatch: ");
   if (incubationStarted) {
-    time_t hatchEpoch = incubationStartEpoch + (INCUBATION_DAYS * 86400UL);
+    time_t hatchEpoch = (time_t)incubationStartEpoch + ((INCUBATION_DAYS - 1) * 86400UL);
     struct tm hatchTm;
     localtime_r(&hatchEpoch, &hatchTm);
 
@@ -783,7 +783,7 @@ void drawStatusPage2() {
   display.setCursor(0, 24);
   display.print("Hatch : ");
   if (incubationStarted) {
-    time_t hatchEpoch = incubationStartEpoch + (INCUBATION_DAYS * 86400UL);
+    time_t hatchEpoch = incubationStartEpoch + ((INCUBATION_DAYS - 1) * 86400UL);
     struct tm hatchTm;
     localtime_r(&hatchEpoch, &hatchTm);
 

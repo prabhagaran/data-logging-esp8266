@@ -1256,16 +1256,19 @@ void loop() {
 
   unsigned long now = millis();
 
- if (uiState == UI_HOME) {
-  if (alarmState != ALARM_STATE_NONE && alarmsEnabled) {
-    drawHomeWithAlarm();
-  } else {
-    drawHome();
+  if (millis() - lastUiRefresh >= UI_REFRESH_INTERVAL) {
+    lastUiRefresh = millis();
+
+    if (uiState == UI_HOME) {
+      if (alarmState != ALARM_STATE_NONE && alarmsEnabled) {
+        drawHomeWithAlarm();
+      } else {
+        drawHome();
+      }
+    } else if (uiState == UI_STATUS) {
+      drawStatus();
+    }
   }
-}
-else if (uiState == UI_STATUS) {
-  drawStatus();
-}
 
 
 
@@ -1380,7 +1383,11 @@ else if (uiState == UI_STATUS) {
       confirmStartIndex = (confirmStartIndex + enc + 2) % 2;
       drawConfirmTemperature();
     } else if (uiState == UI_ALARM_SETTINGS) {
-      alarmsEnabled = !alarmsEnabled;
+      static int alarmSel = 0;  // 0 = ENABLED, 1 = DISABLED
+
+      alarmSel = (alarmSel + enc + 2) % 2;
+      alarmsEnabled = (alarmSel == 0);
+
       drawAlarmSettings();
     }
   }
@@ -1391,9 +1398,7 @@ else if (uiState == UI_STATUS) {
 
     // ================= ALARM ACK =================
     // 🔔 ACK alarm ONLY on HOME screen
- if (uiState == UI_HOME &&
-    alarmsEnabled &&
-    (alarmState == ALARM_STATE_LATCHED)) {
+    if (uiState == UI_HOME && alarmsEnabled && (alarmState == ALARM_STATE_LATCHED)) {
 
 
       updateAlarms();

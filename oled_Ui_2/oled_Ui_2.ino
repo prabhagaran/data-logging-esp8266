@@ -87,6 +87,9 @@ bool alarmBlinkState = false;
 unsigned long lastAlarmBlink = 0;
 const unsigned long ALARM_BLINK_INTERVAL = 250;  // ms
 
+// ================= ALARM LATCH TIMING =================
+unsigned long alarmActiveSince = 0;
+const unsigned long ALARM_LATCH_DELAY = 3000; // ms
 
 // ================== UI STATE ==================
 enum UiState {
@@ -314,9 +317,9 @@ void updateAlarms() {
 
 void updateAlarmFSM() {
 
-  // activeAlarm is already set by updateAlarms()
   if (!alarmsEnabled) {
     alarmState = ALARM_STATE_NONE;
+    alarmActiveSince = 0;
     return;
   }
 
@@ -324,18 +327,26 @@ void updateAlarmFSM() {
 
     case ALARM_STATE_NONE:
       if (activeAlarm != ALARM_NONE) {
+        alarmActiveSince = millis();          // ⏱ start timing
         alarmState = ALARM_STATE_ACTIVE;
       }
       break;
 
     case ALARM_STATE_ACTIVE:
-      // Critical alarms become latched
-      if (activeAlarm == ALARM_SENSOR_FAULT || activeAlarm == ALARM_OVER_TEMP) {
-        alarmState = ALARM_STATE_LATCHED;
-      }
-      // Under-temp auto clears
-      else if (activeAlarm == ALARM_NONE) {
+
+      // Alarm cleared → reset
+      if (activeAlarm == ALARM_NONE) {
         alarmState = ALARM_STATE_NONE;
+        alarmActiveSince = 0;
+      }
+
+      // Critical alarms → latch only after delay
+      else if (
+        (activeAlarm == ALARM_SENSOR_FAULT ||
+         activeAlarm == ALARM_OVER_TEMP) &&
+        (millis() - alarmActiveSince >= ALARM_LATCH_DELAY)
+      ) {
+        alarmState = ALARM_STATE_LATCHED;
       }
       break;
 
@@ -344,12 +355,13 @@ void updateAlarmFSM() {
       break;
   }
 
-  // 🔒 Force heater OFF ONLY for critical alarms
+  // 🔒 Force heater OFF ONLY for latched alarms
   if (alarmState == ALARM_STATE_LATCHED) {
     heaterOn = false;
     digitalWrite(HEATER_PIN, LOW);
   }
 }
+
 
 
 /**

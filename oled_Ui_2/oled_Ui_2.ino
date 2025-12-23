@@ -98,9 +98,7 @@ enum UiState {
   UI_HYSTERESIS,
   UI_EDIT_TEMPERATURE,
   UI_CONFIRM_TEMPERATURE,
-  UI_ALARM_SETTINGS,
-  UI_ALARM
-
+  UI_ALARM_SETTINGS
 };
 UiState uiState = UI_HOME;
 
@@ -663,6 +661,68 @@ void drawHome() {
   display.display();
 }
 
+void drawHomeWithAlarm() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  // ----- Title -----
+  display.setCursor(0, 0);
+  display.println("!!! ALARM !!!");
+  display.drawLine(0, 10, 127, 10, SSD1306_WHITE);
+
+  // ----- Alarm content -----
+  display.setCursor(0, 16);
+
+  switch (activeAlarm) {
+
+    case ALARM_SENSOR_FAULT:
+      display.println("Sensor failure");
+      display.println("Temp: --.- C");
+      display.println("Heater OFF");
+      break;
+
+    case ALARM_OVER_TEMP:
+      display.println("High temperature");
+      display.print("Now : ");
+      display.print(liveTemp, 1);
+      display.println(" C");
+
+      display.print("Max : ");
+      display.print(maxSafeTemp, 1);
+      display.println(" C");
+
+      display.println("Heater OFF");
+      break;
+
+    case ALARM_UNDER_TEMP:
+      display.println("Low temperature");
+      display.print("Now : ");
+      display.print(liveTemp, 1);
+      display.println(" C");
+
+      display.print("Min : ");
+      display.print(minSafeTemp, 1);
+      display.println(" C");
+
+      display.println("Heating...");
+      break;
+
+    default:
+      break;
+  }
+
+  // ----- Footer hint (only for critical alarms) -----
+  if (alarmState == ALARM_STATE_LATCHED) {
+    display.setCursor(0, 54);
+    display.println("Press to ACK");
+  }
+
+  display.display();
+}
+
+
+
 void drawAlarmSettings() {
   drawHeader("ALARM SETTINGS");
 
@@ -1192,23 +1252,21 @@ void loop() {
     }
   }
 
-  // ---------- Force alarm UI ONLY when enabled ----------
-  if (alarmState != ALARM_STATE_NONE && alarmsEnabled) {
-    uiState = UI_ALARM;
-    drawAlarmScreen();
-    return;
-  }
+
 
   unsigned long now = millis();
 
-  if (now - lastUiRefresh > UI_REFRESH_INTERVAL) {
-    lastUiRefresh = now;
-
-    if (uiState == UI_HOME)
-      drawHome();
-    else if (uiState == UI_STATUS)
-      drawStatus();
+ if (uiState == UI_HOME) {
+  if (alarmState != ALARM_STATE_NONE && alarmsEnabled) {
+    drawHomeWithAlarm();
+  } else {
+    drawHome();
   }
+}
+else if (uiState == UI_STATUS) {
+  drawStatus();
+}
+
 
 
   // ---------- Encoder ----------
@@ -1332,27 +1390,24 @@ void loop() {
     lastUiActivity = millis();
 
     // ================= ALARM ACK =================
-    if (uiState == UI_ALARM) {
+    // 🔔 ACK alarm ONLY on HOME screen
+ if (uiState == UI_HOME &&
+    alarmsEnabled &&
+    (alarmState == ALARM_STATE_LATCHED)) {
 
-      updateAlarms();    // check current condition
-      updateAlarmFSM();  // sync FSM
 
-      // Clear alarm ONLY if problem is gone
-      // Clear alarm ONLY if problem is gone
+      updateAlarms();
+
+      // Clear only if condition resolved
       if (activeAlarm == ALARM_NONE) {
         alarmState = ALARM_STATE_NONE;
-
-        // 🔒 Safety reset (important)
         heaterOn = false;
         digitalWrite(HEATER_PIN, LOW);
-
-        uiState = UI_HOME;
-        drawHome();
       }
 
-
-      return;  // 🔒 block all other buttons
+      return;  // consume button
     }
+
 
 
 

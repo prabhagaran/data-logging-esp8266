@@ -226,8 +226,7 @@ unsigned long lastHeaterUpdate = 0;
 
 const unsigned long UI_TIMEOUT = 10000;
 const unsigned long HEATER_INTERVAL = 1000;
-const unsigned long MIN_RELAY_TIME = 5000;  // 5 seconds
-unsigned long lastRelayChange = 0;
+
 
 
 // ================== WIFI ==================

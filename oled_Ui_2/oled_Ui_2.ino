@@ -85,7 +85,7 @@ const unsigned long TEMP_INTERVAL = 1000;
 // ================= ALARM ICON =================
 bool alarmBlinkState = false;
 unsigned long lastAlarmBlink = 0;
-const unsigned long ALARM_BLINK_INTERVAL = 500; // ms
+const unsigned long ALARM_BLINK_INTERVAL = 250;  // ms
 
 
 // ================== UI STATE ==================
@@ -575,21 +575,12 @@ void drawAlarmIcon() {
   if (!alarmsEnabled || alarmState == ALARM_STATE_NONE)
     return;
 
-  // ----- Blink handling for critical alarms -----
-  if (alarmState == ALARM_STATE_LATCHED) {
-    if (millis() - lastAlarmBlink > ALARM_BLINK_INTERVAL) {
-      lastAlarmBlink = millis();
-      alarmBlinkState = !alarmBlinkState;
-    }
-    if (!alarmBlinkState)
-      return;  // hide icon during OFF phase
-  }
-
-  int x = 116;  // top-right corner
+  int x = 92;  // top-right corner (avoids WiFi overlap)
   int y = 0;
 
+  // ⚠️ WARNING (steady icon)
   if (alarmState == ALARM_STATE_ACTIVE) {
-    // ⚠️ WARNING (triangle)
+
     display.drawTriangle(
       x + 4, y + 2,
       x,     y + 10,
@@ -599,13 +590,20 @@ void drawAlarmIcon() {
     display.drawLine(x + 4, y + 5, x + 4, y + 8, SSD1306_WHITE);
     display.drawPixel(x + 4, y + 9, SSD1306_WHITE);
   }
+
+  // 🚨 CRITICAL (blinking icon)
   else if (alarmState == ALARM_STATE_LATCHED) {
-    // 🚨 CRITICAL (boxed exclamation)
+
+    // Blink control (state toggled in loop())
+    if (!alarmBlinkState)
+      return;
+
     display.drawRect(x, y + 2, 10, 10, SSD1306_WHITE);
     display.drawLine(x + 5, y + 4, x + 5, y + 8, SSD1306_WHITE);
     display.drawPixel(x + 5, y + 10, SSD1306_WHITE);
   }
 }
+
 
 // ================= OLED SCREENS =================
 void drawHome() {
@@ -849,8 +847,8 @@ void drawAlarmScreen() {
     default:
       break;
   }
- 
- drawAlarmIcon();
+
+  drawAlarmIcon();
   display.display();
 }
 
@@ -861,7 +859,7 @@ void drawMenu() {
     display.print(i == menuIndex ? "> " : "  ");
     display.println(menuItems[i]);
   }
-  
+
   drawAlarmIcon();
   display.display();
 }
@@ -873,8 +871,8 @@ void drawIncubationMenu() {
     display.print(i == incubationMenuIndex ? "> " : "  ");
     display.println(incubationMenuItems[i]);
   }
- 
- drawAlarmIcon();
+
+  drawAlarmIcon();
   display.display();
 }
 
@@ -945,7 +943,7 @@ void drawIncubationInfo() {
   display.setCursor(0, 58);
   display.print("21d : ");
   display.println(incubationDay >= 21 ? "DONE" : "PENDING");
-  
+
   drawAlarmIcon();
   display.display();
 }
@@ -1131,7 +1129,7 @@ void drawEditTemperature() {
   display.setCursor(0, 42);
   display.print(tempEditField == EDIT_MIN_SAFE_TEMP ? "> " : "  ");
   display.printf("MinSafe: %.1f C", editMinSafeTemp);
-drawAlarmIcon();
+  drawAlarmIcon();
 
   display.display();
 }
@@ -1152,7 +1150,7 @@ void drawConfirmTemperature() {
 
   display.setCursor(0, 58);
   display.print(confirmStartIndex == 1 ? "> CANCEL" : "  CANCEL");
-drawAlarmIcon();
+  drawAlarmIcon();
 
   display.display();
 }
@@ -1175,6 +1173,7 @@ void drawManualHeater() {
   display.print(manualSelectIndex == 1 ? "> ON" : "  ON");
   display.setCursor(0, 40);
   display.print(manualSelectIndex == 0 ? "> OFF" : "  OFF");
+  drawAlarmIcon();
   display.display();
 }
 
@@ -1294,6 +1293,11 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED && millis() - lastTimeCheck > 1000) {
     lastTimeCheck = millis();
     timeValid = getLocalTime(&timeinfo);
+  }
+  // --- Alarm icon blink timing ---
+  if (alarmState == ALARM_STATE_LATCHED && millis() - lastAlarmBlink > ALARM_BLINK_INTERVAL) {
+    lastAlarmBlink = millis();
+    alarmBlinkState = !alarmBlinkState;
   }
 
   // ---------- Heater + screen refresh ----------

@@ -14,6 +14,8 @@
 #include <EEPROM.h>
 #include <time.h>
 
+// ================= Global Variable =================
+
 // ================= EEPROM =================
 #define EEPROM_SIZE 64
 
@@ -79,6 +81,12 @@ unsigned long lastTempRequest = 0;
 unsigned long tempRequestTime = 0;
 bool tempRequested = false;
 const unsigned long TEMP_INTERVAL = 1000;
+
+// ================= ALARM ICON =================
+bool alarmBlinkState = false;
+unsigned long lastAlarmBlink = 0;
+const unsigned long ALARM_BLINK_INTERVAL = 500; // ms
+
 
 // ================== UI STATE ==================
 enum UiState {
@@ -503,7 +511,7 @@ void drawWifiStatus() {
   display.setCursor(0, 54);
   display.print("Time  : ");
   display.println(timeValid ? "SYNCED" : "NOT SYNCED");
-
+  drawAlarmIcon();
   display.display();
 }
 
@@ -561,6 +569,42 @@ void drawHeader(const char* title) {
   display.setCursor(0, 0);
   display.println(title);
   display.drawLine(0, 10, 127, 10, SSD1306_WHITE);
+}
+void drawAlarmIcon() {
+  // Do not show icon if alarms disabled or no alarm
+  if (!alarmsEnabled || alarmState == ALARM_STATE_NONE)
+    return;
+
+  // ----- Blink handling for critical alarms -----
+  if (alarmState == ALARM_STATE_LATCHED) {
+    if (millis() - lastAlarmBlink > ALARM_BLINK_INTERVAL) {
+      lastAlarmBlink = millis();
+      alarmBlinkState = !alarmBlinkState;
+    }
+    if (!alarmBlinkState)
+      return;  // hide icon during OFF phase
+  }
+
+  int x = 116;  // top-right corner
+  int y = 0;
+
+  if (alarmState == ALARM_STATE_ACTIVE) {
+    // ⚠️ WARNING (triangle)
+    display.drawTriangle(
+      x + 4, y + 2,
+      x,     y + 10,
+      x + 8, y + 10,
+      SSD1306_WHITE
+    );
+    display.drawLine(x + 4, y + 5, x + 4, y + 8, SSD1306_WHITE);
+    display.drawPixel(x + 4, y + 9, SSD1306_WHITE);
+  }
+  else if (alarmState == ALARM_STATE_LATCHED) {
+    // 🚨 CRITICAL (boxed exclamation)
+    display.drawRect(x, y + 2, 10, 10, SSD1306_WHITE);
+    display.drawLine(x + 5, y + 4, x + 5, y + 8, SSD1306_WHITE);
+    display.drawPixel(x + 5, y + 10, SSD1306_WHITE);
+  }
 }
 
 // ================= OLED SCREENS =================
@@ -657,7 +701,7 @@ void drawHome() {
   } else {
     display.print("--");
   }
-
+  drawAlarmIcon();
   display.display();
 }
 
@@ -717,7 +761,7 @@ void drawHomeWithAlarm() {
     display.setCursor(0, 54);
     display.println("Press to ACK");
   }
-
+  drawAlarmIcon();
   display.display();
 }
 
@@ -731,7 +775,7 @@ void drawAlarmSettings() {
 
   display.setCursor(0, 40);
   display.print(!alarmsEnabled ? "> DISABLED" : "  DISABLED");
-
+  drawAlarmIcon();
   display.display();
 }
 
@@ -750,7 +794,7 @@ void drawConfirmStart() {
 
   display.print(confirmStartIndex == 1 ? "> " : "  ");
   display.println("CANCEL");
-
+  drawAlarmIcon();
   display.display();
 }
 
@@ -805,7 +849,8 @@ void drawAlarmScreen() {
     default:
       break;
   }
-
+ 
+ drawAlarmIcon();
   display.display();
 }
 
@@ -816,6 +861,8 @@ void drawMenu() {
     display.print(i == menuIndex ? "> " : "  ");
     display.println(menuItems[i]);
   }
+  
+  drawAlarmIcon();
   display.display();
 }
 
@@ -826,6 +873,8 @@ void drawIncubationMenu() {
     display.print(i == incubationMenuIndex ? "> " : "  ");
     display.println(incubationMenuItems[i]);
   }
+ 
+ drawAlarmIcon();
   display.display();
 }
 
@@ -851,6 +900,7 @@ void drawIncubationStart() {
   display.print(incubationStartIndex == 2 ? "> " : "  ");
   display.println("BACK");
 
+  drawAlarmIcon();
   display.display();
 }
 void drawIncubationInfo() {
@@ -859,6 +909,7 @@ void drawIncubationInfo() {
   if (!incubationStarted) {
     display.setCursor(0, 24);
     display.println("Not started");
+    drawAlarmIcon();
     display.display();
     return;
   }
@@ -894,7 +945,8 @@ void drawIncubationInfo() {
   display.setCursor(0, 58);
   display.print("21d : ");
   display.println(incubationDay >= 21 ? "DONE" : "PENDING");
-
+  
+  drawAlarmIcon();
   display.display();
 }
 
@@ -930,7 +982,7 @@ void drawEditStartDateTime() {
     display.printf("Min   : [%02d]", editMinute);
   else
     display.printf("Min   :  %02d ", editMinute);
-
+  drawAlarmIcon();
   display.display();
 }
 
@@ -979,7 +1031,7 @@ void drawStatusPage1() {
   display.print(setTemp, 1);
   display.print(" Hys : ");
   display.print(hysteresis, 1);
-
+  drawAlarmIcon();
   display.display();
 }
 void drawStatusPage2() {
@@ -1031,7 +1083,7 @@ void drawStatusPage2() {
   // Log placeholder
   display.setCursor(0, 48);
   display.print("Log   : OK");
-
+  drawAlarmIcon();
   display.display();
 }
 void drawStatus() {
@@ -1049,6 +1101,7 @@ void drawWifiMenu() {
     display.print(i == wifiMenuIndex ? "> " : "  ");
     display.println(wifiMenuItems[i]);
   }
+  drawAlarmIcon();
   display.display();
 }
 
@@ -1059,6 +1112,8 @@ void drawSettings() {
     display.print(i == settingsIndex ? "> " : "  ");
     display.println(settingsItems[i]);
   }
+  drawAlarmIcon();
+
   display.display();
 }
 
@@ -1076,6 +1131,7 @@ void drawEditTemperature() {
   display.setCursor(0, 42);
   display.print(tempEditField == EDIT_MIN_SAFE_TEMP ? "> " : "  ");
   display.printf("MinSafe: %.1f C", editMinSafeTemp);
+drawAlarmIcon();
 
   display.display();
 }
@@ -1096,6 +1152,7 @@ void drawConfirmTemperature() {
 
   display.setCursor(0, 58);
   display.print(confirmStartIndex == 1 ? "> CANCEL" : "  CANCEL");
+drawAlarmIcon();
 
   display.display();
 }
@@ -1107,6 +1164,8 @@ void drawHeaterMode() {
     display.print(i == heaterModeIndex ? "> " : "  ");
     display.println(heaterModeItems[i]);
   }
+  drawAlarmIcon();
+
   display.display();
 }
 
@@ -1125,6 +1184,9 @@ void drawHysteresis() {
   display.print("Value: +-");
   display.print(hysteresis, 1);
   display.print(" C");
+
+  drawAlarmIcon();
+
   display.display();
 }
 

@@ -35,6 +35,8 @@
 
 
 
+// ================= EEPROM DIRTY FLAG =================
+bool settingsDirty = false;
 
 uint8_t eepromHeaterMode = 0;
 uint8_t eepromManualState = 0;
@@ -94,6 +96,10 @@ const unsigned long ALARM_LATCH_DELAY = 3000; // ms
 // ================= HARD SAFETY LIMIT =================
 #define HARD_MAX_TEMP 45.0  // Absolute safety cut-off (°C)
 
+// ================= HEATER STRESS PROTECTION =================
+const unsigned long MIN_HEATER_ON_TIME  = 5000;  // ms
+const unsigned long MIN_HEATER_OFF_TIME = 5000;  // ms
+unsigned long heaterStateSince = 0;
 
 // ================== UI STATE ==================
 enum UiState {
@@ -282,6 +288,7 @@ void safetyHardCutoff() {
 
 // ================= HEATER CONTROL =================
 void updateHeaterControl() {
+
   if (!sensorValid) {
     heaterOn = false;
     digitalWrite(HEATER_PIN, LOW);
@@ -301,14 +308,28 @@ void updateHeaterControl() {
 
   unsigned long now = millis();
 
-  // 🔒 Anti-chatter protection
-  if (desiredState != heaterOn && (now - lastRelayChange) >= MIN_RELAY_TIME) {
+  // ================= STRESS PROTECTION =================
+  if (desiredState != heaterOn) {
 
+    // Trying to turn ON
+    if (desiredState == true) {
+      if (now - heaterStateSince < MIN_HEATER_OFF_TIME)
+        return;
+    }
+
+    // Trying to turn OFF
+    if (desiredState == false) {
+      if (now - heaterStateSince < MIN_HEATER_ON_TIME)
+        return;
+    }
+
+    // Allowed to switch
     heaterOn = desiredState;
     digitalWrite(HEATER_PIN, heaterOn ? HIGH : LOW);
-    lastRelayChange = now;
+    heaterStateSince = now;
   }
 }
+
 void updateAlarms() {
 
   if (!alarmsEnabled) {
@@ -382,6 +403,17 @@ void updateAlarmFSM() {
   }
 }
 
+void commitSettingsIfDirty() {
+
+  static unsigned long lastCommit = 0;
+
+  // Commit at most once every 2 seconds
+  if (settingsDirty && millis() - lastCommit >= 2000) {
+    saveSettingsToEEPROM();
+    settingsDirty = false;
+    lastCommit = millis();
+  }
+}
 
 
 /**
@@ -1262,7 +1294,8 @@ void startIncubationFromEdit() {
   incubationStarted = true;
 
   updateIncubationDay();
-  saveSettingsToEEPROM();
+  settingsDirty = true;
+
 }
 
 
@@ -1278,6 +1311,8 @@ void setup() {
   digitalWrite(HEATER_PIN, LOW);
   heaterOn = false;
   manualHeaterOn = false;
+  heaterStateSince = millis();
+
 
 
 
@@ -1572,7 +1607,7 @@ if (millis() - lastHeaterUpdate > HEATER_INTERVAL) {
         incubationStarted = false;
         incubationDay = 0;
         incubationStartEpoch = 0;  // 🔒 CLEAR STORED TIME
-        saveSettingsToEEPROM();
+       settingsDirty = true;
         drawIncubationMenu();
       }
 
@@ -1680,7 +1715,7 @@ if (millis() - lastHeaterUpdate > HEATER_INTERVAL) {
         drawMenu();
       }
     } else if (uiState == UI_ALARM_SETTINGS) {
-      saveSettingsToEEPROM();
+      settingsDirty = true;
       uiState = UI_SETTINGS;
       drawSettings();
     }
@@ -1706,7 +1741,7 @@ if (millis() - lastHeaterUpdate > HEATER_INTERVAL) {
         setTemp = editTargetTemp;
         maxSafeTemp = editMaxSafeTemp;
         minSafeTemp = editMinSafeTemp;
-        saveSettingsToEEPROM();
+        settingsDirty = true;
       }
 
       uiState = UI_SETTINGS;
@@ -1717,7 +1752,7 @@ if (millis() - lastHeaterUpdate > HEATER_INTERVAL) {
     // ===== HEATER MODE =====
     else if (uiState == UI_HEATER_MODE) {
       heaterMode = heaterModeIndex == 0 ? HEATER_AUTO : HEATER_MANUAL;
-      saveSettingsToEEPROM();
+      settingsDirty = true;
 
       if (heaterMode == HEATER_MANUAL) {
         manualSelectIndex = manualHeaterOn ? 1 : 0;
@@ -1732,14 +1767,14 @@ if (millis() - lastHeaterUpdate > HEATER_INTERVAL) {
     // ===== MANUAL HEATER =====
     else if (uiState == UI_MANUAL_HEATER) {
       manualHeaterOn = (manualSelectIndex == 1);
-      saveSettingsToEEPROM();
+      settingsDirty = true;
       uiState = UI_SETTINGS;
       drawSettings();
     }
 
     // ===== HYSTERESIS =====
     else if (uiState == UI_HYSTERESIS) {
-      saveSettingsToEEPROM();
+     settingsDirty = true;
       uiState = UI_SETTINGS;
       drawSettings();
     }
@@ -1754,4 +1789,6 @@ if (millis() - lastHeaterUpdate > HEATER_INTERVAL) {
     uiState = UI_HOME;
     drawHome();
   }
+  commitSettingsIfDirty();
+
 }

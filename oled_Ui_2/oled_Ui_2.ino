@@ -91,6 +91,10 @@ const unsigned long ALARM_BLINK_INTERVAL = 250;  // ms
 unsigned long alarmActiveSince = 0;
 const unsigned long ALARM_LATCH_DELAY = 3000; // ms
 
+// ================= HARD SAFETY LIMIT =================
+#define HARD_MAX_TEMP 45.0  // Absolute safety cut-off (°C)
+
+
 // ================== UI STATE ==================
 enum UiState {
   UI_HOME,
@@ -256,6 +260,22 @@ void temperatureTask() {
     }
 
     tempRequested = false;
+  }
+}
+void safetyHardCutoff() {
+
+  // Sensor invalid → heater OFF
+  if (!sensorValid) {
+    heaterOn = false;
+    digitalWrite(HEATER_PIN, LOW);
+    return;
+  }
+
+  // Absolute over-temperature → heater OFF
+  if (liveTemp >= HARD_MAX_TEMP) {
+    heaterOn = false;
+    digitalWrite(HEATER_PIN, LOW);
+    return;
   }
 }
 
@@ -1314,21 +1334,21 @@ void loop() {
 
   // ---------- Heater + screen refresh ----------
   // ---------- Heater + Alarm refresh ----------
-  if (millis() - lastHeaterUpdate > HEATER_INTERVAL) {
-    lastHeaterUpdate = millis();
+if (millis() - lastHeaterUpdate > HEATER_INTERVAL) {
+  lastHeaterUpdate = millis();
 
-    updateAlarms();    // 1️⃣ Detect alarm condition
-    updateAlarmFSM();  // 2️⃣ Update alarm state (NONE / ACTIVE / LATCHED)
+  updateAlarms();
+  updateAlarmFSM();
 
-    if (alarmState == ALARM_STATE_LATCHED) {
-      // 🔒 Critical alarm → heater OFF
-      heaterOn = false;
-      digitalWrite(HEATER_PIN, LOW);
-    } else {
-      // ✅ Normal + UNDER_TEMP → heater allowed
-      updateHeaterControl();
-    }
+  safetyHardCutoff();   // 🔒 ABSOLUTE SAFETY FIRST
+
+  if (alarmState == ALARM_STATE_LATCHED) {
+    heaterOn = false;
+    digitalWrite(HEATER_PIN, LOW);
+  } else {
+    updateHeaterControl();
   }
+}
 
 
 
